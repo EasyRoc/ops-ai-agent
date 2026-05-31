@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+venv/
+.venv/
+
+# Java
+*.class
+*.jar
+*.war
+target/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Docker
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Worktrees
+.worktrees/
