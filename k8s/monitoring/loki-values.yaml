@@ -26,3 +26,13 @@ read:
   replicas: 0
 write:
   replicas: 0
+
+# 禁用所有非核心组件，减少 kind 资源消耗
+lokiCanary:
+  enabled: false
+gateway:
+  enabled: false
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
