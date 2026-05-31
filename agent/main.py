@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from agent.config import settings
+from agent.api.v1 import alerts
 
 logging.basicConfig(
     level=logging.INFO,
@@ -25,6 +26,8 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+app.include_router(alerts.router)
 
 
 @app.get("/health")
