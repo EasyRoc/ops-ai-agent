@@ -1,4 +1,5 @@
 deploymentMode: SingleBinary
+
 loki:
   auth_enabled: false
   commonConfig:
@@ -13,7 +14,15 @@ loki:
         object_store: filesystem
   storage:
     type: filesystem
+
 singleBinary:
   replicas: 1
   persistence:
     enabled: false
+
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
