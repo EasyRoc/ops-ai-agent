@@ -1,0 +1,30 @@
+{
+  "config": { "wide_screen_mode": true },
+  "header": {
+    "title": { "tag": "plain_text", "content": "{{alert_title}} - 诊断完成" },
+    "template": "{{severity_color}}"
+  },
+  "elements": [
+    {
+      "tag": "markdown",
+      "content": "**根因判断：**\n{{root_cause}}"
+    },
+    { "tag": "hr" },
+    {
+      "tag": "markdown",
+      "content": "**证据：**\n{{evidence_list}}"
+    },
+    { "tag": "hr" },
+    {
+      "tag": "markdown",
+      "content": "**置信度：** {{confidence}}%"
+    },
+    { "tag": "hr" },
+    {
+      "tag": "note",
+      "elements": [
+        { "tag": "plain_text", "content": "事件编号: {{incident_id}} | 状态: {{status}} | 耗时: {{duration}}" }
+      ]
+    }
+  ]
+}
