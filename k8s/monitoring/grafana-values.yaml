@@ -1,0 +1,57 @@
+grafana:
+  adminPassword: admin123
+  service:
+    type: NodePort
+    nodePort: 30030
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          orgId: 1
+          folder: ""
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+  dashboards:
+    default:
+      demo-services:
+        json: |
+          {
+            "title": "Demo Services Overview",
+            "uid": "demo-services",
+            "panels": [
+              {
+                "title": "CPU Usage",
+                "type": "graph",
+                "targets": [
+                  {
+                    "expr": "rate(process_cpu_usage[1m]) * 100",
+                    "legendFormat": "{{service}}"
+                  }
+                ]
+              },
+              {
+                "title": "Request Rate",
+                "type": "graph",
+                "targets": [
+                  {
+                    "expr": "rate(http_server_requests_seconds_count[1m])",
+                    "legendFormat": "{{service}} - {{status}}"
+                  }
+                ]
+              },
+              {
+                "title": "Error Rate",
+                "type": "graph",
+                "targets": [
+                  {
+                    "expr": "rate(http_server_requests_seconds_count{status=~\"5..\"}[1m]) / rate(http_server_requests_seconds_count[1m])",
+                    "legendFormat": "{{service}}"
+                  }
+                ]
+              }
+            ]
+          }
