@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/v1")
 async def receive_alert(request: Request, background_tasks: BackgroundTasks):
     """Receive Alertmanager Webhook callback"""
     body = await request.json()
-    logger.info(f"Received alert webhook: {body.get('receiver', 'unknown')}")
+    logger.info(f"收到告警 Webhook: receiver={body.get('receiver', 'unknown')}")
 
     alerts = body.get("alerts", [])
     if not alerts:
@@ -36,6 +36,10 @@ async def receive_alert(request: Request, background_tasks: BackgroundTasks):
 
 async def run_diagnosis(alert_data: dict):
     """Run diagnosis in background"""
+    logger.info(
+        f"启动后台诊断: 告警={alert_data.get('alertname')}, "
+        f"服务={alert_data.get('service')}, 指纹={alert_data.get('fingerprint', '?')[:12]}"
+    )
     workflow = build_alert_workflow()
     state: AlertState = {
         "alert_raw": alert_data,
@@ -47,6 +51,6 @@ async def run_diagnosis(alert_data: dict):
     }
     try:
         result = await workflow.ainvoke(state)
-        logger.info(f"Diagnosis completed for {alert_data.get('service')}: incident={result.get('incident_id')}")
+        logger.info(f"诊断完成: 服务={alert_data.get('service')}, incident={result.get('incident_id')}")
     except Exception as e:
-        logger.error(f"Diagnosis failed: {e}", exc_info=True)
+        logger.error(f"诊断失败: 服务={alert_data.get('service')}, 错误={e}", exc_info=True)

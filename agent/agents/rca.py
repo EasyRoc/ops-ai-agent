@@ -8,26 +8,23 @@ logger = logging.getLogger("ops-agent.rca")
 
 
 async def analyze_root_cause(state: AlertState) -> AlertState:
-    """Main RCA entry point called by the workflow.
-
-    Extracts context and alert info from state, dispatches to the appropriate
-    diagnosis function based on alert type, persists results to DB, and pushes
-    a diagnosis card to Feishu.
-    """
+    """Main RCA entry point called by the workflow."""
     context = state.get("context", {})
     alert = state.get("alert_parsed", {})
     incident_id = state.get("incident_id")
 
     if not context or not incident_id:
-        logger.warning("RCA skipped: missing context or incident_id")
+        logger.warning("根因分析跳过: 缺少上下文或工单ID")
         return state
 
     alert_name = alert.get("alertname", "")
 
     try:
         if "CPU" in alert_name.upper():
+            logger.info(f"根因分析: 分发到 CPU 诊断 ({alert_name})")
             diagnosis = _diagnose_cpu_high(context)
         else:
+            logger.info(f"根因分析: 使用通用诊断 ('{alert_name}')")
             diagnosis = _diagnose_generic(context, alert)
 
         await _save_diagnosis(incident_id, diagnosis)
@@ -35,27 +32,19 @@ async def analyze_root_cause(state: AlertState) -> AlertState:
 
         state["diagnosis"] = diagnosis
         logger.info(
-            f"Diagnosis complete for {incident_id}: "
-            f"root_cause={diagnosis['root_cause']}, "
-            f"confidence={diagnosis['confidence']}"
+            f"诊断完成: 工单={incident_id}, "
+            f"根因={diagnosis['root_cause']}, "
+            f"置信度={diagnosis['confidence']}"
         )
     except Exception as e:
-        logger.error(f"RCA failed: {e}", exc_info=True)
+        logger.error(f"根因分析失败: {e}", exc_info=True)
         state["error"] = str(e)
 
     return state
 
 
 def _diagnose_cpu_high(context: dict) -> dict:
-    """CPU high diagnosis decision tree.
-
-    Uses QPS and pod health signals to classify the root cause of a CPU spike.
-
-    Decision rules:
-      - QPS > 100 AND all pods healthy -> traffic-driven resource shortage
-      - Not all pods healthy AND QPS < 50 -> single-instance anomaly / dead loop
-      - Otherwise -> indeterminate, recommend human investigation
-    """
+    """CPU high diagnosis decision tree."""
     metrics = context.get("metrics", {})
     pods = context.get("pods", {})
 
@@ -68,6 +57,11 @@ def _diagnose_cpu_high(context: dict) -> dict:
     total_pods = pods.get("total", 0)
     ready_pods = pods.get("ready", 0)
     all_pods_healthy = ready_pods == total_pods and total_pods > 0
+
+    logger.info(
+        f"CPU 诊断: cpu={cpu_current:.1f}%, qps={qps_current:.1f}, "
+        f"pod={ready_pods}/{total_pods}, 全部健康={all_pods_healthy}"
+    )
 
     evidence = [
         f"CPU使用率: {cpu_current:.1f}%",
@@ -82,6 +76,7 @@ def _diagnose_cpu_high(context: dict) -> dict:
             f"所有{total_pods}个实例CPU均高，QPS({qps_current:.1f})显著上升，"
             "判断为流量驱动型资源不足"
         )
+        logger.info(f"CPU 诊断结果: 流量驱动 (置信度={confidence})")
     elif not all_pods_healthy and qps_current < 50:
         root_cause = "单实例异常或代码死循环"
         confidence = 0.70
@@ -90,6 +85,7 @@ def _diagnose_cpu_high(context: dict) -> dict:
             f"仅{not_ready_count}个实例异常(共{total_pods}个)，"
             f"QPS({qps_current:.1f})不高，判断为单实例故障或代码问题"
         )
+        logger.info(f"CPU 诊断结果: 单实例异常 (置信度={confidence})")
     else:
         root_cause = "CPU异常升高，需进一步排查"
         confidence = 0.40
@@ -98,6 +94,7 @@ def _diagnose_cpu_high(context: dict) -> dict:
             f"(QPS={qps_current:.1f}, Pods={ready_pods}/{total_pods})，"
             "建议人工介入"
         )
+        logger.warning(f"CPU 诊断结果: 无法确定 (置信度={confidence})")
 
     return {
         "root_cause": root_cause,
@@ -109,6 +106,7 @@ def _diagnose_cpu_high(context: dict) -> dict:
 def _diagnose_generic(context: dict, alert: dict) -> dict:
     """Generic fallback diagnosis for alert types without dedicated logic."""
     alert_name = alert.get("alertname", "未知")
+    logger.info(f"通用诊断: 告警={alert_name}")
     return {
         "root_cause": f"收到{alert_name}告警，等待扩展诊断能力",
         "confidence": 0.3,
@@ -130,14 +128,13 @@ async def _save_diagnosis(incident_id: str, diagnosis: dict):
             evidence=diagnosis.get("evidence"),
             status="diagnosed",
         )
-        logger.info(f"Diagnosis saved to DB for {incident_id}")
+        logger.info(f"诊断结果已保存到数据库: 工单={incident_id}")
 
 
 async def _notify_diagnosis(incident_id: str, diagnosis: dict, alert: dict):
     """Push a diagnosis result card to the service's Feishu chat.
 
-    Errors during notification are logged but do not propagate — the workflow
-    continues regardless of delivery success.
+    Errors during notification are logged but do not propagate.
     """
     from agent.channels.feishu import send_card_to_chat
     from agent.templates import render_card
@@ -171,15 +168,13 @@ async def _notify_diagnosis(incident_id: str, diagnosis: dict, alert: dict):
         if chat_id:
             result = await send_card_to_chat(chat_id, card)
             logger.info(
-                f"Diagnosis notification sent to chat {chat_id} "
-                f"for incident {incident_id}: code={result.get('code')}"
+                f"诊断通知已发送: 群={chat_id}, "
+                f"工单={incident_id}, code={result.get('code')}"
             )
         else:
             logger.warning(
-                f"No chat_id found for service '{service}', "
-                f"skipping Feishu notification for {incident_id}"
+                f"服务 '{service}' 未配置 chat_id，"
+                f"跳过诊断通知: 工单={incident_id}"
             )
     except Exception as e:
-        logger.error(
-            f"Failed to send diagnosis notification for {incident_id}: {e}"
-        )
+        logger.error(f"诊断通知发送失败: 工单={incident_id}, 错误={e}")

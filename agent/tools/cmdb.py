@@ -38,20 +38,29 @@ MOCK_CMDB = {
 async def get_service_info(service: str) -> dict:
     """Get CMDB info for a service"""
     info = MOCK_CMDB.get(service, {})
-    logger.info(f"CMDB lookup: {service} -> owner={info.get('owner', 'unknown')}")
+    logger.info(f"CMDB 查询: {service} -> 负责人={info.get('owner', '未知')}")
     return info
 
 
 async def get_service_owner(service: str) -> str:
     info = await get_service_info(service)
-    return info.get("owner", "unknown")
+    owner = info.get("owner", "unknown")
+    if owner == "unknown":
+        logger.warning(f"CMDB: 服务 '{service}' 未找到，负责人未知")
+    return owner
 
 
 async def get_service_dependencies(service: str) -> list:
     info = await get_service_info(service)
-    return info.get("dependencies", [])
+    deps = info.get("dependencies", [])
+    if not deps:
+        logger.warning(f"CMDB: 服务 '{service}' 无依赖记录")
+    return deps
 
 
 async def get_service_chat_id(service: str) -> str:
     info = await get_service_info(service)
-    return info.get("chat_id", "")
+    chat_id = info.get("chat_id", "")
+    if not chat_id:
+        logger.warning(f"CMDB: 服务 '{service}' 未配置飞书群 chat_id")
+    return chat_id

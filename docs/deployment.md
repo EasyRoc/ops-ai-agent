@@ -149,7 +149,7 @@ cd ops-ai-agent
 cp .env.example .env   # 如没有 .env.example，直接编辑 .env
 ```
 
-编辑 `.env`，至少需要填写以下三项：
+编辑 `.env`，填写 DeepSeek API Key；如需飞书卡片通知，再填写飞书应用凭证：
 
 ```ini
 # DeepSeek API（必填）
@@ -159,8 +159,6 @@ DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxx
 FEISHU_APP_ID=cli_xxxxxxxxxxxxxxxx
 FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
-# 飞书 Bot Webhook（可选）
-FEISHU_BOT_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxxx
 ```
 
 其他配置项使用默认值即可：
@@ -246,6 +244,7 @@ helm repo update
 # 安装 kube-prometheus-stack
 helm install prometheus prometheus-community/kube-prometheus-stack \
   -f k8s/monitoring/prometheus-values.yaml \
+  -f k8s/monitoring/grafana-values.yaml \
   --namespace monitoring --create-namespace
 ```
 
@@ -290,20 +289,21 @@ kubectl get pods -n monitoring --context kind-ops-agent | grep -E "loki|promtail
 # Prometheus
 kubectl port-forward -n monitoring svc/prometheus-operated 9090:9090 --context kind-ops-agent &
 curl -s http://localhost:9090/-/healthy
-# 输出: Prometheus is Healthy.
+# 输出: Prometheus Server is Healthy.
 
 # Alertmanager
 kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-alertmanager 9093:9093 --context kind-ops-agent &
 curl -s http://localhost:9093/-/healthy
-# 输出: Healthy
+# 输出: OK
 
 # Loki
 kubectl port-forward -n monitoring svc/loki 3100:3100 --context kind-ops-agent &
 curl -s http://localhost:3100/ready
-# 输出: Ready
+# 输出: ready
 
-# Grafana（通过 NodePort 直接访问）
-curl -s -o /dev/null -w "%{http_code}" http://localhost:30030
+# Grafana
+kubectl port-forward -n monitoring svc/prometheus-grafana 30030:80 --context kind-ops-agent &
+curl -s -o /dev/null -w "%{http_code}" http://localhost:30030/login
 # 输出: 200
 ```
 
@@ -352,15 +352,8 @@ ENTRYPOINT ["java", "-jar", "app.jar"]
 # 方案 A：宿主机构建 JAR + 简单 Dockerfile（推荐）
 cd demo-services
 
-# 为每个服务创建简单的 Dockerfile
+# 仓库中已提供每个服务的简单 Dockerfile
 for svc in frontend order payment inventory; do
-  cat > ${svc}-service/Dockerfile << 'DOCKERFILE_EOF'
-FROM eclipse-temurin:17-jre
-WORKDIR /app
-COPY target/*.jar app.jar
-ENTRYPOINT ["java", "-jar", "app.jar"]
-DOCKERFILE_EOF
-
   # 构建服务 JAR
   mvn package -DskipTests -pl ${svc}-service -am
 
@@ -389,6 +382,8 @@ docker exec -it ops-agent-control-plane crictl images | grep demo-
 ```bash
 cd /path/to/ops-ai-agent  # 回到项目根目录
 
+kubectl apply -f k8s/demo-services/namespace.yaml --context kind-ops-agent
+kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/demo --timeout=60s --context kind-ops-agent
 kubectl apply -f k8s/demo-services/ --context kind-ops-agent
 ```
 
@@ -444,18 +439,19 @@ Agent 通过 kubectl proxy 访问 K8S API，需在后台运行：
 kubectl proxy --port=8001 --context kind-ops-agent &
 ```
 
-### 8.2 启动 Prometheus 和 Loki Port-Forward
+### 8.2 启动可观测栈 Port-Forward
 
 ```bash
 kubectl port-forward -n monitoring svc/prometheus-operated 9090:9090 --context kind-ops-agent &
+kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-alertmanager 9093:9093 --context kind-ops-agent &
 kubectl port-forward -n monitoring svc/loki 3100:3100 --context kind-ops-agent &
+kubectl port-forward -n monitoring svc/prometheus-grafana 30030:80 --context kind-ops-agent &
 ```
 
 ### 8.3 启动 Agent
 
 ```bash
-source .venv/bin/activate   # 激活虚拟环境
-cd agent
+source .venv/bin/activate   # 在项目根目录激活虚拟环境
 
 # 开发模式启动（支持热重载）
 uvicorn agent.main:app --host 0.0.0.0 --port 8000 --reload
@@ -509,7 +505,10 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 1. 在飞书中创建一个运维告警群
 2. 在群设置 → 群机器人 → 添加机器人 → 选择你创建的应用
-3. 通过飞书 **事件订阅** 获取 `chat_id`（调试阶段也可先不配置，Agent 会使用 CMDB Mock 中的 chat_id）
+3. 通过飞书 **事件订阅** 获取 `chat_id`
+4. 将 `agent/tools/cmdb.py` 中 `oc_chat_*` 示例值替换为对应群聊的真实 `chat_id`
+
+> CMDB Mock 中的 `oc_chat_*` 仅为占位符。未替换时不影响告警接收和自动诊断，但飞书卡片无法投递。
 
 ---
 
@@ -522,9 +521,9 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 | 1 | PostgreSQL | `docker compose exec postgres pg_isready` | accepting connections |
 | 2 | Redis | `docker compose exec redis redis-cli ping` | PONG |
 | 3 | K8S 集群 | `kubectl get nodes --context kind-ops-agent` | 3 Ready |
-| 4 | Prometheus | `curl -s http://localhost:9090/-/healthy` | Healthy |
-| 5 | Loki | `curl -s http://localhost:3100/ready` | Ready |
-| 6 | Grafana | `curl -s -o /dev/null -w "%{http_code}" http://localhost:30030` | 200 |
+| 4 | Prometheus | `curl -s http://localhost:9090/-/healthy` | Prometheus Server is Healthy. |
+| 5 | Loki | `curl -s http://localhost:3100/ready` | ready |
+| 6 | Grafana | `curl -s -o /dev/null -w "%{http_code}" http://localhost:30030/login` | 200 |
 | 7 | 样例服务 | `kubectl get pods -n demo --context kind-ops-agent` | 8 Running |
 | 8 | Agent | `curl -s http://localhost:8000/health` | {"status":"ok"} |
 | 9 | Prom 指标 | `curl -s "http://localhost:9090/api/v1/label/service/values"` | 含 demo 服务名 |
@@ -581,12 +580,13 @@ curl -s http://localhost:8000/api/v1/incidents/INC-XXXXXXXXXXXX | python3 -m jso
 ### 11.2 通过真实故障触发（完整链路）
 
 ```bash
-# 1. 触发 CPU 故障
-kubectl exec -n demo deploy/order-service --context kind-ops-agent -- \
-  curl -s -X POST http://localhost:8081/fault/cpu?enable=true
+# 1. 转发 order-service 端口并触发 CPU 故障
+kubectl port-forward -n demo svc/order-service 8081:8081 --context kind-ops-agent &
+curl -s -X POST "http://localhost:8081/fault/cpu?enable=true"
 
-# 2. 等待 90 秒让 Prometheus 触发告警并转发到 Alertmanager Webhook
-sleep 90
+# 2. 等待 150 秒让 Prometheus 触发告警并转发到 Alertmanager Webhook
+#    实际耗时受抓取、规则评估和 Alertmanager 聚合周期影响
+sleep 150
 
 # 3. 检查 Prometheus 告警
 curl -s "http://localhost:9090/api/v1/alerts" | python3 -c "
@@ -606,8 +606,7 @@ for i in d['incidents']:
 "
 
 # 5. 重置故障
-kubectl exec -n demo deploy/order-service --context kind-ops-agent -- \
-  curl -s -X POST http://localhost:8081/fault/reset
+curl -s -X POST http://localhost:8081/fault/reset
 ```
 
 ---
@@ -743,7 +742,9 @@ fi
 # 3. 启动 Port Forward
 echo "[3/5] Starting port-forward..."
 kubectl port-forward -n monitoring svc/prometheus-operated 9090:9090 --context kind-ops-agent &
+kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-alertmanager 9093:9093 --context kind-ops-agent &
 kubectl port-forward -n monitoring svc/loki 3100:3100 --context kind-ops-agent &
+kubectl port-forward -n monitoring svc/prometheus-grafana 30030:80 --context kind-ops-agent &
 kubectl proxy --port=8001 --context kind-ops-agent &
 sleep 2
 

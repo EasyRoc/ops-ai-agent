@@ -17,9 +17,9 @@ logger = logging.getLogger("ops-agent")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info(f"Ops Agent starting on {settings.agent_host}:{settings.agent_port}")
+    logger.info(f"Ops Agent 启动中 {settings.agent_host}:{settings.agent_port}")
     yield
-    logger.info("Ops Agent shutting down")
+    logger.info("Ops Agent 正在关闭")
 
 
 app = FastAPI(

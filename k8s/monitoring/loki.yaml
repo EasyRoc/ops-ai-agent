@@ -9,6 +9,7 @@ data:
     server:
       http_listen_port: 3100
     common:
+      path_prefix: /var/loki
       replication_factor: 1
       ring:
         kvstore:
@@ -17,10 +18,11 @@ data:
       configs:
         - from: "2024-01-01"
           store: tsdb
+          object_store: filesystem
+          schema: v13
           index:
             prefix: loki_index_
             period: 24h
-          object_store: filesystem
     storage_config:
       filesystem:
         directory: /var/loki

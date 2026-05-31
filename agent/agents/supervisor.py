@@ -7,6 +7,10 @@ logger = logging.getLogger("ops-agent.supervisor")
 
 async def run_alert_workflow(alert_raw: dict) -> dict:
     """Run the full alert-handling workflow, return final diagnosis result"""
+    alert_name = alert_raw.get("alertname", "unknown")
+    service = alert_raw.get("service", "unknown")
+    logger.info(f"启动告警工作流: 告警={alert_name}, 服务={service}")
+
     workflow = build_alert_workflow()
 
     initial_state: AlertState = {
@@ -19,7 +23,7 @@ async def run_alert_workflow(alert_raw: dict) -> dict:
     }
 
     result = await workflow.ainvoke(initial_state)
-    logger.info(f"Workflow completed for incident: {result.get('incident_id')}")
+    logger.info(f"工作流执行完成: 工单={result.get('incident_id')}, 错误={result.get('error')}")
     return result
 
 
@@ -33,21 +37,43 @@ async def collect_context_for_incident(state: AlertState) -> AlertState:
     service = state["alert_parsed"]["service"]
     env = state["alert_parsed"].get("env", "prod")
 
+    logger.info(f"采集上下文: 服务={service}, 环境={env}")
+
+    metrics, logs, pods, cmdb_info = {}, [], {}, {}
+    errors = []
+
     try:
         metrics = await query_service_metrics(service)
-        logs = await query_service_logs(service)
-        pods = await get_service_pods(service, namespace=f"demo")
-        cmdb_info = await get_service_info(service)
-
-        state["context"] = {
-            "metrics": metrics,
-            "logs": logs,
-            "pods": pods,
-            "cmdb": cmdb_info,
-        }
-        logger.info(f"Context collected for {service}: {len(metrics)} metrics, {len(logs)} log entries")
     except Exception as e:
-        logger.error(f"Context collection failed: {e}")
-        state["error"] = str(e)
+        logger.error(f"Prometheus 查询失败 [{service}]: {e}")
+        errors.append(f"prometheus: {e}")
 
+    try:
+        logs = await query_service_logs(service)
+    except Exception as e:
+        logger.error(f"Loki 查询失败 [{service}]: {e}")
+        errors.append(f"loki: {e}")
+
+    try:
+        pods = await get_service_pods(service, namespace="demo")
+    except Exception as e:
+        logger.error(f"K8s 查询失败 [{service}]: {e}")
+        errors.append(f"k8s: {e}")
+
+    try:
+        cmdb_info = await get_service_info(service)
+    except Exception as e:
+        logger.error(f"CMDB 查询失败 [{service}]: {e}")
+        errors.append(f"cmdb: {e}")
+
+    state["context"] = {
+        "metrics": metrics,
+        "logs": logs,
+        "pods": pods,
+        "cmdb": cmdb_info,
+    }
+
+    if errors:
+        logger.warning(f"上下文采集部分失败: {len(errors)} 个工具出错 [{service}]: {errors}")
+    logger.info(f"上下文采集完成 [{service}]: 指标={len(metrics)} 项, 日志={len(logs)} 条, Pod={pods.get('total', 0)} 个")
     return state

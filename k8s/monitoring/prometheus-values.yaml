@@ -1,5 +1,6 @@
-# k8s/monitoring/prometheus-values.yaml
-server:
+prometheus:
+  prometheusSpec:
+    maximumStartupDurationSeconds: 600
   service:
     type: NodePort
     nodePort: 30090
@@ -10,24 +11,29 @@ alertmanager:
     global:
       resolve_timeout: 5m
     route:
-      receiver: "ops-agent-webhook"
+      receiver: "null"
       group_by: ["alertname", "service"]
       group_wait: 10s
       group_interval: 10s
       repeat_interval: 5m
+      routes:
+        - receiver: "ops-agent-webhook"
+          matchers:
+            - alertname =~ "HighCPUUsage|HighErrorRate"
     receivers:
+      - name: "null"
       - name: "ops-agent-webhook"
         webhook_configs:
           - url: "http://host.docker.internal:8000/api/v1/alerts"
             send_resolved: true
 
-serverFiles:
-  alerting_rules.yml:
+additionalPrometheusRulesMap:
+  demo-services:
     groups:
       - name: demo-services
         rules:
           - alert: HighCPUUsage
-            expr: rate(process_cpu_usage[1m]) * 100 > 90
+            expr: process_cpu_usage * 100 > 90
             for: 1m
             labels:
               severity: P2
