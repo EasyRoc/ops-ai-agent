@@ -265,19 +265,13 @@ kubectl get pods -n monitoring --context kind-ops-agent | grep -E "prometheus|al
 
 ### 6.3 部署 Loki + Promtail
 
-`loki-stack` chart 已废弃，改为分别安装 Loki 和 Promtail。
-
 ```bash
-# 添加 Helm 仓库
+# 部署 Loki（kubectl 直接部署，无需 Helm）
+kubectl apply -f k8s/monitoring/loki.yaml --context kind-ops-agent
+
+# 安装 Promtail（Helm）
 helm repo add grafana https://grafana.github.io/helm-charts
 helm repo update
-
-# 安装 Loki（单节点模式）
-helm install loki grafana/loki \
-  -f k8s/monitoring/loki-values.yaml \
-  --namespace monitoring
-
-# 安装 Promtail
 helm install promtail grafana/promtail \
   -f k8s/monitoring/promtail-values.yaml \
   --namespace monitoring
@@ -287,7 +281,7 @@ helm install promtail grafana/promtail \
 
 ```bash
 kubectl get pods -n monitoring --context kind-ops-agent | grep -E "loki|promtail"
-# 预期: loki-0 Running, promtail-* Running (每个节点一个)
+# 预期: loki-xxx Running (1个), promtail-* Running (每个节点一个)
 ```
 
 ### 6.4 验证可观测栈

@@ -59,11 +59,11 @@ helm install prometheus prometheus-community/kube-prometheus-stack \
   -f k8s/monitoring/prometheus-values.yaml \
   --namespace monitoring --create-namespace
 
-# Loki + Promtail
+# Loki
+kubectl apply -f k8s/monitoring/loki.yaml --context kind-ops-agent
+
+# Promtail
 helm repo add grafana https://grafana.github.io/helm-charts
-helm install loki grafana/loki \
-  -f k8s/monitoring/loki-values.yaml \
-  --namespace monitoring
 helm install promtail grafana/promtail \
   -f k8s/monitoring/promtail-values.yaml \
   --namespace monitoring
