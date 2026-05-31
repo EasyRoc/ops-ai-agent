@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from agent.config import settings
 from agent.api.v1 import alerts
+from agent.api.v1 import incidents
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +29,7 @@ app = FastAPI(
 )
 
 app.include_router(alerts.router)
+app.include_router(incidents.router)
 
 
 @app.get("/health")
