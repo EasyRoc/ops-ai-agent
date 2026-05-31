@@ -1,0 +1,16 @@
+config:
+  clients:
+    - url: http://loki:3100/loki/api/v1/push
+  snippets:
+    pipelineStages:
+      - cri: {}
+      - match:
+          selector: '{app=~"frontend|order|payment|inventory"}'
+          stages:
+            - json:
+                expressions:
+                  level: level
+                  message: message
+            - labels:
+                level:
+                service: app

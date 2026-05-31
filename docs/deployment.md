@@ -182,11 +182,8 @@ FEISHU_BOT_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/xxxxxxxxx
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install fastapi uvicorn pydantic-settings asyncpg sqlalchemy \
-            redis httpx langgraph openai
+pip install -r requirements.txt
 ```
-
-> 后续可以创建 `requirements.txt` 固化版本，当前直接安装即可。
 
 ---
 
@@ -268,22 +265,29 @@ kubectl get pods -n monitoring --context kind-ops-agent | grep -E "prometheus|al
 
 ### 6.3 部署 Loki + Promtail
 
+`loki-stack` chart 已废弃，改为分别安装 Loki 和 Promtail。
+
 ```bash
-# 添加 Grafana Helm 仓库
+# 添加 Helm 仓库
 helm repo add grafana https://grafana.github.io/helm-charts
 helm repo update
 
-# 安装 Loki Stack（包含 Promtail）
-helm install loki grafana/loki-stack \
+# 安装 Loki（单节点模式）
+helm install loki grafana/loki \
   -f k8s/monitoring/loki-values.yaml \
+  --namespace monitoring
+
+# 安装 Promtail
+helm install promtail grafana/promtail \
+  -f k8s/monitoring/promtail-values.yaml \
   --namespace monitoring
 ```
 
 验证：
 
 ```bash
-kubectl get pods -n monitoring --context kind-ops-agent | grep loki
-# 预期: loki-0 Running, loki-promtail-* Running (每个节点一个)
+kubectl get pods -n monitoring --context kind-ops-agent | grep -E "loki|promtail"
+# 预期: loki-0 Running, promtail-* Running (每个节点一个)
 ```
 
 ### 6.4 验证可观测栈
