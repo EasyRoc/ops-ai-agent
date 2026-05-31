@@ -5,12 +5,13 @@ from langgraph.graph import StateGraph, END
 logger = logging.getLogger("ops-agent.workflow")
 
 class AlertState(TypedDict):
-    alert_raw: dict
-    incident_id: Optional[str]
-    alert_parsed: Optional[dict]
-    context: Optional[dict]
-    diagnosis: Optional[dict]
-    error: Optional[str]
+    """告警处理工作流的状态，在各节点间流转"""
+    alert_raw: dict            # Alertmanager 原始告警数据（labels、annotations、fingerprint 等）
+    incident_id: Optional[str]  # 工单ID，parse_alert 节点去重后创建并回填
+    alert_parsed: Optional[dict] # 解析后的告警结构化字段（service、env、severity 等）
+    context: Optional[dict]     # collect_context 采集的可观测性数据（metrics、logs、pods、cmdb）
+    diagnosis: Optional[dict]   # diagnose 节点输出的根因分析结果（root_cause、confidence、evidence）
+    error: Optional[str]        # 任意节点异常时写入，触发工作流提前终止
 
 
 async def parse_alert(state: AlertState) -> AlertState:
