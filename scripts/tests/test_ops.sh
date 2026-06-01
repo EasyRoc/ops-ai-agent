@@ -47,6 +47,17 @@ assert_file_missing() {
   fi
 }
 
+assert_not_equal() {
+  local actual="$1"
+  local unexpected="$2"
+  local message="$3"
+  if [[ "$actual" != "$unexpected" ]]; then
+    pass "$message"
+  else
+    fail "$message (unexpected: $unexpected)"
+  fi
+}
+
 new_fixture() {
   FIXTURE="$(mktemp -d)"
   mkdir -p "$FIXTURE/.ops/pids" "$FIXTURE/.ops/logs"
@@ -114,11 +125,61 @@ test_unknown_command_prints_usage() {
   remove_fixture
 }
 
+test_managed_process_lifecycle() {
+  new_fixture
+  source_ops
+  start_managed_process sleeper "" sleep 30
+  assert_file_exists "$PID_DIR/sleeper.pid" 'managed process writes PID file'
+  if is_managed_process_running sleeper; then
+    pass 'managed process reports running'
+  else
+    fail 'managed process reports running'
+  fi
+  stop_managed_process sleeper
+  assert_file_missing "$PID_DIR/sleeper.pid" 'managed stop removes PID file'
+  remove_fixture
+}
+
+test_stale_pid_is_replaced_when_starting() {
+  new_fixture
+  source_ops
+  printf '999999\n' >"$PID_DIR/sleeper.pid"
+  start_managed_process sleeper "" sleep 30
+  assert_not_equal "$(cat "$PID_DIR/sleeper.pid")" '999999' 'managed start replaces stale PID'
+  stop_managed_process sleeper
+  remove_fixture
+}
+
+test_unmanaged_port_is_rejected() {
+  new_fixture
+  source_ops
+  port_in_use() {
+    return 0
+  }
+  local output
+  local exit_code
+  set +e
+  output="$(start_managed_process occupied 45678 sleep 30 2>&1)"
+  exit_code=$?
+  set -e
+  if [[ "$exit_code" -ne 0 ]]; then
+    pass 'unmanaged occupied port exits non-zero'
+  else
+    fail 'unmanaged occupied port exits non-zero'
+  fi
+  assert_contains "$output" 'Port 45678 is already in use' 'occupied port error is actionable'
+  assert_file_missing "$PID_DIR/occupied.pid" 'occupied port does not create PID file'
+  remove_fixture
+}
+
 run_all() {
   test_usage_lists_primary_commands
   test_init_env_file_copies_example
   test_stale_pid_is_removed
   test_unknown_command_prints_usage
+  test_managed_process_lifecycle
+  test_stale_pid_is_replaced_when_starting
+  test_unmanaged_port_is_rejected
 
   printf '\nTests: %s passed, %s failed\n' "$PASS_COUNT" "$FAIL_COUNT"
   [[ "$FAIL_COUNT" -eq 0 ]]
