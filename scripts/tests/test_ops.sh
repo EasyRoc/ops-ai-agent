@@ -131,7 +131,7 @@ test_unknown_command_prints_usage() {
   else
     fail 'unknown command exits non-zero'
   fi
-  assert_contains "$output" 'Unknown command: unknown' 'unknown command is named'
+  assert_contains "$output" '未知命令: unknown' 'unknown command is named'
   assert_contains "$output" './ops.sh help' 'unknown command prints usage'
   remove_fixture
 }
@@ -178,7 +178,7 @@ test_unmanaged_port_is_rejected() {
   else
     fail 'unmanaged occupied port exits non-zero'
   fi
-  assert_contains "$output" 'Port 45678 is already in use' 'occupied port error is actionable'
+  assert_contains "$output" '端口 45678 已被非托管进程占用' 'occupied port error is actionable'
   assert_file_missing "$PID_DIR/occupied.pid" 'occupied port does not create PID file'
   remove_fixture
 }
@@ -279,7 +279,7 @@ test_missing_dependency_prints_platform_hint() {
   else
     fail 'missing dependency exits non-zero'
   fi
-  assert_contains "$output" 'Missing required command: helm' 'missing dependency is named'
+  assert_contains "$output" '缺少必需命令: helm' 'missing dependency is named'
   assert_contains "$output" 'brew install' 'macOS dependency hint uses Homebrew'
   remove_fixture
 }
@@ -293,6 +293,13 @@ test_documentation_recommends_ops_cli() {
   assert_contains "$readme" './ops.sh bootstrap' 'README recommends bootstrap command'
   assert_contains "$readme" './ops.sh status' 'README documents status command'
   assert_contains "$readme" './ops.sh stop' 'README documents stop command'
+  assert_contains "$readme" 'http://localhost:30030/d/demo-services/demo-services-overview' \
+    'README links Grafana demo dashboard'
+  assert_contains "$readme" 'admin / admin123' 'README documents local Grafana login'
+  assert_contains "$readme" '8/8 targets UP' 'README documents Prometheus target health'
+  assert_contains "$readme" 'SERVICE_CHAT_IDS' 'README documents Feishu service chat mapping'
+  assert_contains "$readme" 'flowchart LR' 'README includes monitoring alert flowchart'
+  assert_contains "$readme" 'docs/deployment.md' 'README links detailed deployment guide'
   assert_contains "$deployment" './ops.sh help' 'deployment guide links CLI help'
   if [[ "$deployment" != *'scripts/start-all.sh'* ]]; then
     pass 'deployment guide removes outdated start-all script'
@@ -318,7 +325,7 @@ test_e2e_refuses_unhealthy_environment() {
   else
     fail 'E2E preflight exits non-zero for unhealthy environment'
   fi
-  assert_contains "$output" 'Agent is unavailable' 'E2E preflight names unavailable component'
+  assert_contains "$output" 'Agent 不可达' 'E2E preflight names unavailable component'
   remove_fixture
 }
 
