@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     feishu_app_id: str = ""
     feishu_app_secret: str = ""
 
+    # 服务 → 飞书群 chat_id 映射，JSON 格式: {"服务名":"chat_id", ...}
+    # 留空则回退到 CMDB mock 数据
+    service_chat_ids: str = "{}"
+
+    @property
+    def service_chat_map(self) -> dict:
+        import json
+        return json.loads(self.service_chat_ids)
+
     # Alertmanager dedup window (seconds)
     alert_dedup_window: int = 300
 

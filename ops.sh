@@ -23,21 +23,21 @@ die() {
 
 usage() {
   cat <<'EOF'
-Ops AI Agent local environment manager
+Ops AI Agent 本地环境管理工具
 
-Usage:
-  ./ops.sh bootstrap      Prepare and start the full local environment
-  ./ops.sh start          Start an existing local environment
-  ./ops.sh restart        Restart managed background processes
-  ./ops.sh stop           Stop managed processes and Docker Compose services
-  ./ops.sh status         Show local component health
-  ./ops.sh logs [name]    Tail a managed process log (default: agent)
-  ./ops.sh demo start     Build, load, and deploy demo services
-  ./ops.sh demo stop      Delete demo services
-  ./ops.sh demo restart   Rebuild and redeploy demo services
-  ./ops.sh test           Run the real CPU fault injection E2E test
-  ./ops.sh clean          Stop services and delete the Kind cluster
-  ./ops.sh clean --all    Also delete Docker Compose volumes
+用法:
+  ./ops.sh bootstrap      初始化并启动完整本地环境
+  ./ops.sh start          启动已有的本地环境
+  ./ops.sh restart        重启所有托管的后台进程
+  ./ops.sh stop           停止托管进程和 Docker Compose 服务
+  ./ops.sh status         查看各组件健康状态
+  ./ops.sh logs [名称]    实时查看托管进程日志（默认: agent）
+  ./ops.sh demo start     构建、加载并部署 demo 服务
+  ./ops.sh demo stop      删除 demo 服务
+  ./ops.sh demo restart   重新构建并部署 demo 服务
+  ./ops.sh test           运行 CPU 故障注入端到端测试
+  ./ops.sh clean          停止服务并删除 Kind 集群
+  ./ops.sh clean --all    同时删除 Docker Compose 数据卷
   ./ops.sh help
 EOF
 }
@@ -51,11 +51,11 @@ init_env_file() {
     return
   fi
   if [[ ! -f "$ROOT_DIR/.env.example" ]]; then
-    printf 'Missing environment template: %s\n' "$ROOT_DIR/.env.example" >&2
+    printf '缺少环境变量模板文件: %s\n' "$ROOT_DIR/.env.example" >&2
     return 1
   fi
   cp "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
-  printf 'Created %s from .env.example\n' "$ROOT_DIR/.env"
+  printf '已从 .env.example 创建 %s\n' "$ROOT_DIR/.env"
 }
 
 is_managed_process_running() {
@@ -131,12 +131,12 @@ start_managed_process() {
 
   ensure_runtime_dirs
   if is_managed_process_running "$name"; then
-    info "$name is already running (pid=$(cat "$pid_file"))"
+    info "$name 已在运行 (pid=$(cat "$pid_file"))"
     return
   fi
 
   if [[ -n "$port" ]] && port_in_use "$port"; then
-    die "Port $port is already in use by an unmanaged process. Inspect it with: lsof -nP -iTCP:$port -sTCP:LISTEN"
+    die "端口 $port 已被非托管进程占用，请检查: lsof -nP -iTCP:$port -sTCP:LISTEN"
     return 1
   fi
 
@@ -145,13 +145,13 @@ start_managed_process() {
 
   sleep "${OPS_PROCESS_START_DELAY:-1}"
   if ! is_managed_process_running "$name"; then
-    warn "$name exited during startup. Recent log output:"
+    warn "$name 启动时异常退出，最近日志:"
     tail -n 20 "$log_file" >&2 || true
     return 1
   fi
 
   pid="$(cat "$pid_file")"
-  info "Started $name (pid=$pid${port:+, port=$port})"
+  info "已启动 $name (pid=$pid${port:+, port=$port})"
 }
 
 stop_managed_process() {
@@ -178,7 +178,7 @@ stop_managed_process() {
     kill -9 "$pid" 2>/dev/null || true
   fi
   rm -f "$pid_file"
-  info "Stopped $name"
+  info "已停止 $name"
 }
 
 env_value() {
@@ -229,7 +229,7 @@ start_runtime_processes() {
   start_order_service_forward
 
   if [[ ! -x "$ROOT_DIR/.venv/bin/uvicorn" ]]; then
-    die "Missing $ROOT_DIR/.venv/bin/uvicorn. Run: ./ops.sh bootstrap"
+    die "缺少 $ROOT_DIR/.venv/bin/uvicorn，请执行: ./ops.sh bootstrap"
     return 1
   fi
   start_managed_process agent "$agent_port" \
@@ -259,9 +259,9 @@ dependency_hint() {
   local command_name="$2"
 
   if [[ "$os_name" == "macos" ]]; then
-    printf 'Install missing tools with Homebrew, for example: brew install %s\n' "$command_name"
+    printf '请使用 Homebrew 安装缺失工具: brew install %s\n' "$command_name"
   else
-    printf 'Install missing tools with your package manager, for example: apt-get install %s or brew install %s\n' \
+    printf '请使用包管理器安装缺失工具，如: apt-get install %s 或 brew install %s\n' \
       "$command_name" "$command_name"
   fi
 }
@@ -274,13 +274,13 @@ check_dependencies() {
 
   os_name="$(detect_os)"
   if [[ "$os_name" == "unsupported" ]]; then
-    die "Unsupported operating system: $(uname -s). Supported systems: macOS and Linux."
+    die "不支持的操作系统: $(uname -s)，仅支持 macOS 和 Linux"
     return 1
   fi
 
   for command_name in "${required[@]}"; do
     if ! command_exists "$command_name"; then
-      printf '[ERROR] Missing required command: %s\n' "$command_name" >&2
+      printf '[错误] 缺少必需命令: %s\n' "$command_name" >&2
       dependency_hint "$os_name" "$command_name" >&2
       missing=1
     fi
@@ -290,14 +290,14 @@ check_dependencies() {
   fi
 
   if ! docker compose version >/dev/null 2>&1; then
-    die "Docker Compose v2 is required. Verify with: docker compose version"
+    die "需要 Docker Compose v2，请执行 docker compose version 确认"
     return 1
   fi
 }
 
 check_docker_daemon() {
   if ! docker info >/dev/null 2>&1; then
-    die "Docker daemon is not reachable. Start Docker Desktop or your Docker service, then retry."
+    die "Docker 守护进程不可达，请启动 Docker Desktop 或 Docker 服务后重试"
     return 1
   fi
 }
@@ -323,7 +323,7 @@ wait_for_condition() {
     elapsed=$((elapsed + 2))
   done
 
-  die "Timed out waiting for $description after ${timeout_seconds}s"
+  die "${description} 超时（等待 ${timeout_seconds}s）"
 }
 
 data_services_healthy() {
@@ -332,21 +332,21 @@ data_services_healthy() {
 }
 
 start_data_services() {
-  info "Starting PostgreSQL and Redis"
+  info "启动 PostgreSQL 和 Redis"
   compose up -d
 }
 
 wait_for_data_services() {
-  info "Waiting for PostgreSQL and Redis"
-  wait_for_condition "PostgreSQL and Redis" "${OPS_DATA_TIMEOUT:-90}" data_services_healthy
+  info "等待 PostgreSQL 和 Redis 就绪"
+  wait_for_condition "PostgreSQL 和 Redis 就绪" "${OPS_DATA_TIMEOUT:-90}" data_services_healthy
 }
 
 ensure_python_env() {
   if [[ ! -x "$ROOT_DIR/.venv/bin/python" ]]; then
-    info "Creating Python virtual environment"
+    info "创建 Python 虚拟环境"
     python3 -m venv "$ROOT_DIR/.venv"
   fi
-  info "Installing Python dependencies"
+  info "安装 Python 依赖"
   "$ROOT_DIR/.venv/bin/python" -m pip install -r "$ROOT_DIR/requirements.txt"
 }
 
@@ -356,16 +356,16 @@ kind_cluster_exists() {
 
 ensure_kind_cluster() {
   if kind_cluster_exists; then
-    info "Kind cluster $CLUSTER_NAME already exists"
+    info "Kind 集群 $CLUSTER_NAME 已存在"
     return
   fi
-  info "Creating Kind cluster $CLUSTER_NAME"
+  info "创建 Kind 集群 $CLUSTER_NAME"
   kind create cluster --name "$CLUSTER_NAME" --config "$ROOT_DIR/kind-config.yaml"
 }
 
 require_kind_cluster() {
   if ! kind_cluster_exists; then
-    die "Kind cluster $CLUSTER_NAME does not exist. Run: ./ops.sh bootstrap"
+    die "Kind 集群 $CLUSTER_NAME 不存在，请执行: ./ops.sh bootstrap"
     return 1
   fi
 }
@@ -380,11 +380,11 @@ ensure_helm_repo() {
   local url="$2"
 
   if helm_repo_exists "$name"; then
-    info "Using existing Helm repository $name"
+    info "使用已有 Helm 仓库 $name"
     return
   fi
 
-  info "Adding Helm repository $name"
+  info "添加 Helm 仓库 $name"
   retry_command "Add Helm repository $name" "${OPS_HELM_REPO_ATTEMPTS:-3}" \
     helm repo add "$name" "$url"
 }
@@ -406,23 +406,23 @@ deploy_monitoring() {
   local prometheus_chart
   local promtail_chart
 
-  info "Configuring Helm repositories"
+  info "配置 Helm 仓库"
   ensure_helm_repo prometheus-community https://prometheus-community.github.io/helm-charts
   ensure_helm_repo grafana https://grafana.github.io/helm-charts
   prometheus_chart="$(resolve_helm_chart prometheus-community/kube-prometheus-stack kube-prometheus-stack)"
   promtail_chart="$(resolve_helm_chart grafana/promtail promtail)"
 
-  info "Deploying Prometheus, Alertmanager, and Grafana from $prometheus_chart"
+  info "部署 Prometheus、Alertmanager、Grafana (chart: $prometheus_chart)"
   helm upgrade --install prometheus "$prometheus_chart" \
     --namespace monitoring --create-namespace \
     -f "$ROOT_DIR/k8s/monitoring/prometheus-values.yaml" \
     -f "$ROOT_DIR/k8s/monitoring/grafana-values.yaml" \
     --wait --timeout "${OPS_HELM_TIMEOUT:-10m}"
 
-  info "Deploying Loki"
+  info "部署 Loki"
   kubectl apply -f "$ROOT_DIR/k8s/monitoring/loki.yaml" --context "$KUBE_CONTEXT"
 
-  info "Deploying Promtail from $promtail_chart"
+  info "部署 Promtail (chart: $promtail_chart)"
   helm upgrade --install promtail "$promtail_chart" \
     --namespace monitoring --create-namespace \
     -f "$ROOT_DIR/k8s/monitoring/promtail-values.yaml" \
@@ -430,10 +430,10 @@ deploy_monitoring() {
 }
 
 wait_for_monitoring() {
-  info "Waiting for Loki rollout"
+  info "等待 Loki 部署完成"
   kubectl rollout status deployment/loki -n monitoring --context "$KUBE_CONTEXT" \
     --timeout="${OPS_KUBECTL_TIMEOUT:-180s}"
-  info "Waiting for Promtail rollout"
+  info "等待 Promtail 部署完成"
   kubectl rollout status daemonset/promtail -n monitoring --context "$KUBE_CONTEXT" \
     --timeout="${OPS_KUBECTL_TIMEOUT:-180s}"
 }
@@ -447,7 +447,7 @@ monitoring_stack_exists() {
 
 require_monitoring_stack() {
   if ! monitoring_stack_exists; then
-    die "Monitoring stack is not deployed. Run: ./ops.sh bootstrap"
+    die "监控组件未部署，请执行: ./ops.sh bootstrap"
     return 1
   fi
 }
@@ -458,7 +458,7 @@ demo_services_exist() {
 
 require_demo_services() {
   if ! demo_services_exist; then
-    die "Demo services are not deployed. Run: ./ops.sh demo start"
+    die "Demo 服务未部署，请执行: ./ops.sh demo start"
     return 1
   fi
 }
@@ -474,22 +474,22 @@ retry_command() {
       return
     fi
     if ((attempt < max_attempts)); then
-      warn "$description failed (attempt $attempt/$max_attempts). Retrying..."
+      warn "$description 失败 (第 $attempt/$max_attempts 次)，重试中..."
       sleep "${OPS_RETRY_DELAY:-5}"
     fi
   done
 
-  die "$description failed after $max_attempts attempts"
+  die "$description 失败，已重试 $max_attempts 次"
 }
 
 ensure_demo_base_image() {
   local image="${OPS_DEMO_BASE_IMAGE:-eclipse-temurin:17-jre}"
 
   if docker image inspect "$image" >/dev/null 2>&1; then
-    info "Using cached demo base image $image"
+    info "使用缓存的基础镜像 $image"
     return
   fi
-  info "Pulling demo base image $image"
+  info "拉取基础镜像 $image"
   retry_command "Pull demo base image $image" "${OPS_DOCKER_PULL_ATTEMPTS:-3}" \
     docker pull "$image"
 }
@@ -504,7 +504,7 @@ deploy_demo_services() {
   fi
 
   require_kind_cluster
-  info "Packaging Java demo services"
+  info "打包 Java demo 服务"
   (
     cd "$ROOT_DIR/demo-services"
     mvn clean package -DskipTests
@@ -512,19 +512,19 @@ deploy_demo_services() {
 
   ensure_demo_base_image
   for service in "${services[@]}"; do
-    info "Building demo-$service:latest"
-    retry_command "Build demo-$service:latest" "${OPS_DOCKER_BUILD_ATTEMPTS:-3}" \
+    info "构建镜像 demo-$service:latest"
+    retry_command "构建 demo-$service:latest" "${OPS_DOCKER_BUILD_ATTEMPTS:-3}" \
       docker build -t "demo-$service:latest" "$ROOT_DIR/demo-services/$service-service"
-    info "Loading demo-$service:latest into Kind"
+    info "加载镜像 demo-$service:latest 到 Kind"
     kind load docker-image "demo-$service:latest" --name "$CLUSTER_NAME"
   done
 
-  info "Applying demo namespace"
+  info "创建 demo 命名空间"
   kubectl apply -f "$ROOT_DIR/k8s/demo-services/namespace.yaml" --context "$KUBE_CONTEXT"
   kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/demo \
     --timeout="${OPS_KUBECTL_TIMEOUT:-180s}" --context "$KUBE_CONTEXT"
 
-  info "Deploying demo services"
+  info "部署 demo 服务"
   kubectl apply -f "$ROOT_DIR/k8s/demo-services/" --context "$KUBE_CONTEXT"
   for service in "${services[@]}"; do
     kubectl rollout restart "deployment/$service-service" -n demo --context "$KUBE_CONTEXT"
@@ -562,9 +562,9 @@ restart_demo_services() {
 print_managed_process_status() {
   local name="$1"
   if is_managed_process_running "$name"; then
-    printf '  %-16s running (pid=%s)\n' "$name" "$(cat "$PID_DIR/$name.pid")"
+    printf '  %-16s 运行中 (pid=%s)\n' "$name" "$(cat "$PID_DIR/$name.pid")"
   else
-    printf '  %-16s stopped\n' "$name"
+    printf '  %-16s 已停止\n' "$name"
   fi
 }
 
@@ -577,9 +577,9 @@ print_http_status() {
   local name="$1"
   local url="$2"
   if http_healthy "$url"; then
-    printf '  %-16s healthy (%s)\n' "$name" "$url"
+    printf '  %-16s 正常 (%s)\n' "$name" "$url"
   else
-    printf '  %-16s unavailable (%s)\n' "$name" "$url"
+    printf '  %-16s 不可用 (%s)\n' "$name" "$url"
   fi
 }
 
@@ -588,7 +588,7 @@ require_http_health() {
   local url="$2"
 
   if ! http_healthy "$url"; then
-    die "$name is unavailable at $url. Run: ./ops.sh restart"
+    die "$name 不可达 ($url)，请执行: ./ops.sh restart"
     return 1
   fi
 }
@@ -597,7 +597,7 @@ print_demo_target_status() {
   local result
 
   if ! http_healthy http://localhost:9090/-/healthy; then
-    printf '  prometheus       unavailable\n'
+    printf '  prometheus       不可用\n'
     return
   fi
 
@@ -610,7 +610,7 @@ targets = json.load(sys.stdin)["data"]["result"]
 up = sum(sample["value"][1] == "1" for sample in targets)
 print(f"{up}/{len(targets)} targets UP")
 ')"; then
-    printf '  prometheus       target query failed\n'
+    printf '  prometheus       指标查询失败\n'
     return
   fi
   printf '  prometheus       %s\n' "$result"
@@ -621,38 +621,38 @@ print_configuration_warnings() {
 
   deepseek_api_key="$(env_value DEEPSEEK_API_KEY '')"
   if [[ -z "$deepseek_api_key" || "$deepseek_api_key" == sk-your-* ]]; then
-    warn "DEEPSEEK_API_KEY is empty or still a placeholder. LLM-assisted diagnosis may be unavailable."
+    warn "DEEPSEEK_API_KEY 为空或仍是占位符，LLM 辅助诊断可能不可用"
   fi
   if grep -Rq '"chat_id": "oc_chat_' "$ROOT_DIR/agent/tools/cmdb.py"; then
-    warn "Feishu CMDB chat_id values still use oc_chat_* placeholders. Replace them with real group chat_id values to deliver cards."
+    warn "CMDB 中仍有 oc_chat_* 占位符 chat_id，建议在 .env 中配置 SERVICE_CHAT_IDS 以发送飞书卡片通知"
   fi
 }
 
 show_status() {
   local name
 
-  printf '=== Ops AI Agent Status ===\n'
+  printf '=== Ops AI Agent 状态 ===\n'
   printf '\n[Docker]\n'
   if docker info >/dev/null 2>&1; then
-    printf '  daemon           reachable\n'
+    printf '  守护进程          可达\n'
     compose ps
   else
-    printf '  daemon           unavailable\n'
+    printf '  守护进程          不可达\n'
   fi
 
   printf '\n[Kind]\n'
   if kind_cluster_exists; then
     kubectl get nodes --context "$KUBE_CONTEXT"
   else
-    printf '  cluster          missing (%s)\n' "$KUBE_CONTEXT"
+    printf '  集群              未找到 (%s)\n' "$KUBE_CONTEXT"
   fi
 
-  printf '\n[Managed processes]\n'
+  printf '\n[托管进程]\n'
   for name in kubectl-proxy prometheus alertmanager loki grafana order-service agent; do
     print_managed_process_status "$name"
   done
 
-  printf '\n[Endpoints]\n'
+  printf '\n[服务端点]\n'
   print_http_status agent http://localhost:8000/health
   print_http_status prometheus http://localhost:9090/-/healthy
   print_http_status alertmanager http://localhost:9093/-/healthy
@@ -660,15 +660,15 @@ show_status() {
   print_http_status grafana http://localhost:30030/login
   print_http_status order-service http://localhost:8081/actuator/health
 
-  printf '\n[Demo services]\n'
+  printf '\n[Demo 服务]\n'
   if demo_services_exist; then
     kubectl get deployments -n demo --context "$KUBE_CONTEXT"
     print_demo_target_status
   else
-    printf '  namespace        not deployed\n'
+    printf '  命名空间          未部署\n'
   fi
 
-  printf '\n[Configuration]\n'
+  printf '\n[配置]\n'
   print_configuration_warnings
 }
 
@@ -680,13 +680,13 @@ show_logs() {
     agent|kubectl-proxy|prometheus|alertmanager|loki|grafana|order-service)
       ;;
     *)
-      die "Unknown log name: $name. Choose agent, kubectl-proxy, prometheus, alertmanager, loki, grafana, or order-service."
+      die "未知日志名称: $name，可选: agent, kubectl-proxy, prometheus, alertmanager, loki, grafana, order-service"
       return 1
       ;;
   esac
 
   if [[ ! -f "$log_file" ]]; then
-    die "Log file does not exist yet: $log_file"
+    die "日志文件不存在: $log_file"
     return 1
   fi
   tail -f "$log_file"
@@ -734,7 +734,7 @@ restart_runtime() {
 stop_environment() {
   stop_runtime_processes
   if docker info >/dev/null 2>&1; then
-    info "Stopping PostgreSQL and Redis"
+    info "停止 PostgreSQL 和 Redis"
     compose down
   fi
 }
@@ -760,21 +760,21 @@ clean_environment() {
         assume_yes=1
         ;;
       *)
-        die "Unknown clean option: $arg"
+        die "未知 clean 选项: $arg"
         return 1
         ;;
     esac
   done
 
-  printf 'This will stop local services and delete Kind cluster %s.\n' "$CLUSTER_NAME"
+  printf '将停止本地服务并删除 Kind 集群 %s。\n' "$CLUSTER_NAME"
   if [[ "$remove_volumes" -eq 1 ]]; then
-    printf 'PostgreSQL and Redis Docker volumes will also be deleted.\n'
+    printf '同时会删除 PostgreSQL 和 Redis 的 Docker 数据卷。\n'
   fi
   if [[ "$assume_yes" -ne 1 ]]; then
     local reply
-    read -r -p 'Continue? [y/N] ' reply
+    read -r -p '确认操作? [y/N] ' reply
     [[ "$reply" =~ ^[Yy]$ ]] || {
-      info "Clean cancelled"
+      info "清理已取消"
       return
     }
   fi
@@ -791,7 +791,7 @@ clean_environment() {
     kind delete cluster --name "$CLUSTER_NAME"
   fi
   rm -rf "$OPS_DIR"
-  info "Local environment cleaned"
+  info "本地环境已清理"
 }
 
 main() {
@@ -832,7 +832,7 @@ main() {
           restart_demo_services
           ;;
         *)
-          die "Usage: ./ops.sh demo {start|stop|restart}"
+          die "用法: ./ops.sh demo {start|stop|restart}"
           return 1
           ;;
       esac
@@ -844,7 +844,7 @@ main() {
       clean_environment "$@"
       ;;
     *)
-      printf 'Unknown command: %s\n\n' "$command" >&2
+      printf '未知命令: %s\n\n' "$command" >&2
       usage >&2
       return 1
       ;;

@@ -59,8 +59,15 @@ async def get_service_dependencies(service: str) -> list:
 
 
 async def get_service_chat_id(service: str) -> str:
+    # 优先从 .env 读取，没有则回退到 MOCK_CMDB
+    from agent.config import settings
+    chat_id = settings.service_chat_map.get(service, "")
+    if chat_id:
+        logger.info(f"CMDB: 服务 '{service}' chat_id 来自 .env 配置 ({chat_id})")
+        return chat_id
+
     info = await get_service_info(service)
     chat_id = info.get("chat_id", "")
     if not chat_id:
-        logger.warning(f"CMDB: 服务 '{service}' 未配置飞书群 chat_id")
+        logger.warning(f"CMDB: 服务 '{service}' 未配置飞书群 chat_id（.env 和 CMDB 均无）")
     return chat_id
