@@ -58,6 +58,17 @@ assert_not_equal() {
   fi
 }
 
+assert_equal() {
+  local actual="$1"
+  local expected="$2"
+  local message="$3"
+  if [[ "$actual" == "$expected" ]]; then
+    pass "$message"
+  else
+    fail "$message (expected: $expected, actual: $actual)"
+  fi
+}
+
 new_fixture() {
   FIXTURE="$(mktemp -d)"
   mkdir -p "$FIXTURE/.ops/pids" "$FIXTURE/.ops/logs"
@@ -172,6 +183,92 @@ test_unmanaged_port_is_rejected() {
   remove_fixture
 }
 
+test_primary_command_dispatch() {
+  new_fixture
+  source_ops
+  local trace="$FIXTURE/trace"
+  bootstrap() { printf 'bootstrap\n' >>"$trace"; }
+  start_existing() { printf 'start\n' >>"$trace"; }
+  restart_runtime() { printf 'restart\n' >>"$trace"; }
+  stop_environment() { printf 'stop\n' >>"$trace"; }
+  show_status() { printf 'status\n' >>"$trace"; }
+  show_logs() { printf 'logs:%s\n' "$1" >>"$trace"; }
+  run_e2e() { printf 'test\n' >>"$trace"; }
+  clean_environment() { printf 'clean:%s\n' "$*" >>"$trace"; }
+
+  main bootstrap
+  main start
+  main restart
+  main stop
+  main status
+  main logs
+  main logs loki
+  main test
+  main clean --yes
+  main clean --all --yes
+
+  assert_equal "$(cat "$trace")" "$(cat <<'EOF'
+bootstrap
+start
+restart
+stop
+status
+logs:agent
+logs:loki
+test
+clean:--yes
+clean:--all --yes
+EOF
+)" 'primary commands dispatch to orchestration functions'
+  remove_fixture
+}
+
+test_demo_command_dispatch() {
+  new_fixture
+  source_ops
+  local trace="$FIXTURE/trace"
+  deploy_demo_services() { printf 'demo:start\n' >>"$trace"; }
+  remove_demo_services() { printf 'demo:stop\n' >>"$trace"; }
+  restart_demo_services() { printf 'demo:restart\n' >>"$trace"; }
+
+  main demo start
+  main demo stop
+  main demo restart
+
+  assert_equal "$(cat "$trace")" "$(cat <<'EOF'
+demo:start
+demo:stop
+demo:restart
+EOF
+)" 'demo subcommands dispatch to demo functions'
+  remove_fixture
+}
+
+test_missing_dependency_prints_platform_hint() {
+  new_fixture
+  source_ops
+  command_exists() {
+    [[ "$1" != helm ]]
+  }
+  detect_os() {
+    printf 'macos\n'
+  }
+  local output
+  local exit_code
+  set +e
+  output="$(check_dependencies 2>&1)"
+  exit_code=$?
+  set -e
+  if [[ "$exit_code" -ne 0 ]]; then
+    pass 'missing dependency exits non-zero'
+  else
+    fail 'missing dependency exits non-zero'
+  fi
+  assert_contains "$output" 'Missing required command: helm' 'missing dependency is named'
+  assert_contains "$output" 'brew install' 'macOS dependency hint uses Homebrew'
+  remove_fixture
+}
+
 run_all() {
   test_usage_lists_primary_commands
   test_init_env_file_copies_example
@@ -180,6 +277,9 @@ run_all() {
   test_managed_process_lifecycle
   test_stale_pid_is_replaced_when_starting
   test_unmanaged_port_is_rejected
+  test_primary_command_dispatch
+  test_demo_command_dispatch
+  test_missing_dependency_prints_platform_hint
 
   printf '\nTests: %s passed, %s failed\n' "$PASS_COUNT" "$FAIL_COUNT"
   [[ "$FAIL_COUNT" -eq 0 ]]
