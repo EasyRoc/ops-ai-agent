@@ -33,72 +33,58 @@ Alertmanager → FastAPI Agent → LangGraph Workflow (Alert → Context → RCA
 
 ## 快速开始
 
-### 1. 环境准备
+### 1. 安装系统依赖
 
 ```bash
-# 安装依赖工具
-brew install docker kind helm kubectl
+# macOS
+brew install docker kind helm kubectl maven python
 
-# 启动本地开发环境（PostgreSQL + Redis）
-cp .env.example .env   # 编辑 .env 填入 DeepSeek API Key 和飞书配置
-docker compose up -d
+# Linux 请使用发行版包管理器安装：
+# Docker + Compose v2、kubectl、kind、Helm、Maven、Python 3 和 curl
 ```
 
-### 2. 创建 K8S 集群
+启动 Docker Desktop 或本机 Docker 服务。
+
+### 2. 首次一键启动
 
 ```bash
-kind create cluster --name ops-agent --config kind-config.yaml
+cp .env.example .env
+# 可选：编辑 .env，填入 DeepSeek API Key 和飞书应用凭证
+
+./ops.sh bootstrap
 ```
 
-### 3. 部署可观测栈
+`bootstrap` 会自动准备 Python 虚拟环境、本地 PostgreSQL 和 Redis、Kind
+集群、Prometheus、Alertmanager、Grafana、Loki、Promtail、四个样例服务和
+Agent。首次构建需要下载镜像与 Maven 依赖，会比日常启动更久。
+
+### 3. 日常使用
 
 ```bash
-# Prometheus + Alertmanager + Grafana
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm install prometheus prometheus-community/kube-prometheus-stack \
-  -f k8s/monitoring/prometheus-values.yaml \
-  --namespace monitoring --create-namespace
-
-# Loki
-kubectl apply -f k8s/monitoring/loki.yaml --context kind-ops-agent
-
-# Promtail
-helm repo add grafana https://grafana.github.io/helm-charts
-helm install promtail grafana/promtail \
-  -f k8s/monitoring/promtail-values.yaml \
-  --namespace monitoring
+./ops.sh start          # 启动已有环境
+./ops.sh restart        # 重启 Agent、proxy 和 port-forward
+./ops.sh status         # 查看组件健康状态
+./ops.sh logs agent     # 查看 Agent 日志
+./ops.sh demo restart   # 重新构建并部署样例服务
+./ops.sh test           # 执行真实 CPU 故障注入 E2E
+./ops.sh stop           # 停止后台进程和 Docker Compose
+./ops.sh help           # 查看完整命令列表
 ```
 
-### 4. 构建并部署样例服务
+常用地址：
 
-```bash
-cd demo-services
-mvn clean package -DskipTests
+| 服务 | 地址 |
+|------|------|
+| Agent API | `http://localhost:8000` |
+| Agent API 文档 | `http://localhost:8000/docs` |
+| Prometheus | `http://localhost:9090` |
+| Alertmanager | `http://localhost:9093` |
+| Loki | `http://localhost:3100` |
+| Grafana | `http://localhost:30030`，账号 `admin/admin123` |
 
-# 构建镜像并加载到 kind
-for svc in frontend order payment inventory; do
-  docker build -t demo-${svc}:latest -f ${svc}-service/Dockerfile .
-  kind load docker-image demo-${svc}:latest --name ops-agent
-done
+完整的手工部署步骤和排障命令见
+[`docs/deployment.md`](docs/deployment.md)。
 
-# 部署到 K8S
-kubectl apply -f k8s/demo-services/
-```
-
-### 5. 启动 Agent
-
-```bash
-cd agent
-pip install -r requirements.txt
-uvicorn agent.main:app --host 0.0.0.0 --port 8000
-```
-
-### 6. 端到端测试
-
-```bash
-# 触发 CPU 故障 → 等待告警 → 验证诊断
-bash tests/e2e_phase1.sh
-```
 
 ## API
 
@@ -130,6 +116,7 @@ ops-ai-agent/
 ├── k8s/
 │   ├── demo-services/      # 样例服务 K8S 部署清单
 │   └── monitoring/         # 可观测栈 Helm values
+├── ops.sh                  # 本地环境一键管理入口
 ├── docker-compose.yml      # 本地开发环境
 ├── kind-config.yaml        # kind 集群配置
 └── tests/                  # E2E 测试脚本

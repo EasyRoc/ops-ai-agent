@@ -700,70 +700,48 @@ curl -X POST "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/inter
 ### Q8: 如何停止所有服务？
 
 ```bash
-# 停止 Agent (Ctrl+C)
-# 停止 port-forward
-pkill -f "kubectl port-forward"
-pkill -f "kubectl proxy"
+# 停止本项目后台进程和 Docker Compose，保留 Kind 集群和数据库卷
+./ops.sh stop
 
-# 停止 Docker Compose
-docker compose down
+# 删除 Kind 集群，保留数据库卷
+./ops.sh clean
 
-# 删除 kind 集群（保留数据）
-kind delete cluster --name ops-agent
-
-# 完全清除
-kind delete cluster --name ops-agent
-docker compose down -v  # 删除数据库数据卷
+# 完全清除，包括数据库卷
+./ops.sh clean --all
 ```
 
 ---
 
-## 附录：快速启动脚本
+## 附录：一键管理脚本
 
-将以上流程整合为 `scripts/start-all.sh`：
+首次克隆项目后，在仓库根目录执行：
 
 ```bash
-#!/bin/bash
-set -e
-
-echo "=== Ops AI Agent - Phase 1 启动脚本 ==="
-
-# 1. 数据服务
-echo "[1/5] Starting PostgreSQL + Redis..."
-docker compose up -d
-sleep 3
-
-# 2. 确认 K8S 集群存在
-echo "[2/5] Checking kind cluster..."
-if ! kubectl config get-contexts | grep -q kind-ops-agent; then
-    kind create cluster --name ops-agent --config kind-config.yaml
-fi
-
-# 3. 启动 Port Forward
-echo "[3/5] Starting port-forward..."
-kubectl port-forward -n monitoring svc/prometheus-operated 9090:9090 --context kind-ops-agent &
-kubectl port-forward -n monitoring svc/prometheus-kube-prometheus-alertmanager 9093:9093 --context kind-ops-agent &
-kubectl port-forward -n monitoring svc/loki 3100:3100 --context kind-ops-agent &
-kubectl port-forward -n monitoring svc/prometheus-grafana 30030:80 --context kind-ops-agent &
-kubectl proxy --port=8001 --context kind-ops-agent &
-sleep 2
-
-# 4. 确认样例服务
-echo "[4/5] Checking demo services..."
-READY=$(kubectl get pods -n demo --context kind-ops-agent --field-selector=status.phase=Running 2>/dev/null | grep -c Running || echo 0)
-echo "  Ready pods: $READY (expected 8)"
-
-# 5. 启动 Agent
-echo "[5/5] Starting Agent..."
-source .venv/bin/activate
-cd agent
-uvicorn agent.main:app --host 0.0.0.0 --port 8000 --reload
-
-echo "=== 启动完成 ==="
-echo "Agent API:       http://localhost:8000"
-echo "Agent API Docs:  http://localhost:8000/docs"
-echo "Grafana:         http://localhost:30030 (admin/admin123)"
+cp .env.example .env
+# 可选：编辑 .env，填入 DeepSeek API Key 和飞书应用凭证
+./ops.sh bootstrap
 ```
+
+常用命令：
+
+| 命令 | 说明 |
+|------|------|
+| `./ops.sh bootstrap` | 首次初始化并启动完整本地环境 |
+| `./ops.sh start` | 启动已有环境，不重新构建样例镜像 |
+| `./ops.sh restart` | 重启 Agent、proxy 和 port-forward |
+| `./ops.sh stop` | 停止后台进程和 Docker Compose，保留数据 |
+| `./ops.sh status` | 查看组件健康状态、Pod 和配置提示 |
+| `./ops.sh logs agent` | 持续查看 Agent 日志 |
+| `./ops.sh demo start` | 构建、加载并部署样例服务 |
+| `./ops.sh demo stop` | 删除样例服务 namespace |
+| `./ops.sh demo restart` | 重新构建并部署样例服务 |
+| `./ops.sh test` | 执行真实 CPU 故障注入 E2E |
+| `./ops.sh clean` | 删除 Kind 集群，保留数据库卷 |
+| `./ops.sh clean --all` | 删除 Kind 集群和数据库卷 |
+| `./ops.sh help` | 查看完整命令说明 |
+
+脚本在仓库根目录生成 `.ops/pids/` 和 `.ops/logs/`，只停止本项目记录的后台
+进程，不会使用宽泛的 `pkill` 影响其他本地环境。
 
 ---
 

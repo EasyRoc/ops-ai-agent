@@ -269,6 +269,23 @@ test_missing_dependency_prints_platform_hint() {
   remove_fixture
 }
 
+test_documentation_recommends_ops_cli() {
+  local readme
+  local deployment
+  readme="$(cat "$PROJECT_ROOT/README.md")"
+  deployment="$(cat "$PROJECT_ROOT/docs/deployment.md")"
+
+  assert_contains "$readme" './ops.sh bootstrap' 'README recommends bootstrap command'
+  assert_contains "$readme" './ops.sh status' 'README documents status command'
+  assert_contains "$readme" './ops.sh stop' 'README documents stop command'
+  assert_contains "$deployment" './ops.sh help' 'deployment guide links CLI help'
+  if [[ "$deployment" != *'scripts/start-all.sh'* ]]; then
+    pass 'deployment guide removes outdated start-all script'
+  else
+    fail 'deployment guide removes outdated start-all script'
+  fi
+}
+
 run_all() {
   test_usage_lists_primary_commands
   test_init_env_file_copies_example
@@ -280,6 +297,7 @@ run_all() {
   test_primary_command_dispatch
   test_demo_command_dispatch
   test_missing_dependency_prints_platform_hint
+  test_documentation_recommends_ops_cli
 
   printf '\nTests: %s passed, %s failed\n' "$PASS_COUNT" "$FAIL_COUNT"
   [[ "$FAIL_COUNT" -eq 0 ]]
