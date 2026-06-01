@@ -28,3 +28,6 @@ Thumbs.db
 # Worktrees
 .worktrees/
 .worktrees/
+
+# Local ops runtime
+.ops/
