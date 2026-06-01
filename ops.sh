@@ -89,6 +89,38 @@ port_in_use() {
   fi
 }
 
+spawn_detached_process() {
+  local pid_file="$1"
+  local log_file="$2"
+  shift 2
+
+  python3 - "$pid_file" "$log_file" "$ROOT_DIR" "$@" <<'PY'
+import os
+import sys
+
+pid_file, log_file, root_dir, *command = sys.argv[1:]
+
+first_pid = os.fork()
+if first_pid > 0:
+    os.waitpid(first_pid, 0)
+    raise SystemExit(0)
+
+os.setsid()
+second_pid = os.fork()
+if second_pid > 0:
+    with open(pid_file, "w", encoding="utf-8") as handle:
+        handle.write(f"{second_pid}\n")
+    os._exit(0)
+
+os.chdir(root_dir)
+with open(os.devnull, "rb", buffering=0) as stdin, open(log_file, "ab", buffering=0) as log:
+    os.dup2(stdin.fileno(), 0)
+    os.dup2(log.fileno(), 1)
+    os.dup2(log.fileno(), 2)
+    os.execvp(command[0], command)
+PY
+}
+
 start_managed_process() {
   local name="$1"
   local port="$2"
@@ -109,11 +141,7 @@ start_managed_process() {
   fi
 
   : >"$log_file"
-  (
-    cd "$ROOT_DIR"
-    nohup "$@" >>"$log_file" 2>&1 </dev/null &
-    printf '%s\n' "$!" >"$pid_file"
-  )
+  spawn_detached_process "$pid_file" "$log_file" "$@"
 
   sleep "${OPS_PROCESS_START_DELAY:-1}"
   if ! is_managed_process_running "$name"; then
@@ -176,6 +204,11 @@ stop_runtime_processes() {
   done
 }
 
+start_order_service_forward() {
+  start_managed_process order-service 8081 \
+    kubectl port-forward -n demo svc/order-service 8081:8081 --context "$KUBE_CONTEXT"
+}
+
 start_runtime_processes() {
   local agent_host
   local agent_port
@@ -193,8 +226,7 @@ start_runtime_processes() {
     kubectl port-forward -n monitoring svc/loki 3100:3100 --context "$KUBE_CONTEXT"
   start_managed_process grafana 30030 \
     kubectl port-forward -n monitoring svc/prometheus-grafana 30030:80 --context "$KUBE_CONTEXT"
-  start_managed_process order-service 8081 \
-    kubectl port-forward -n demo svc/order-service 8081:8081 --context "$KUBE_CONTEXT"
+  start_order_service_forward
 
   if [[ ! -x "$ROOT_DIR/.venv/bin/uvicorn" ]]; then
     die "Missing $ROOT_DIR/.venv/bin/uvicorn. Run: ./ops.sh bootstrap"
@@ -338,14 +370,50 @@ require_kind_cluster() {
   fi
 }
 
-deploy_monitoring() {
-  info "Configuring Helm repositories"
-  helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
-  helm repo add grafana https://grafana.github.io/helm-charts --force-update
-  helm repo update
+helm_repo_exists() {
+  local name="$1"
+  helm repo list 2>/dev/null | awk 'NR > 1 {print $1}' | grep -Fxq "$name"
+}
 
-  info "Deploying Prometheus, Alertmanager, and Grafana"
-  helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+ensure_helm_repo() {
+  local name="$1"
+  local url="$2"
+
+  if helm_repo_exists "$name"; then
+    info "Using existing Helm repository $name"
+    return
+  fi
+
+  info "Adding Helm repository $name"
+  retry_command "Add Helm repository $name" "${OPS_HELM_REPO_ATTEMPTS:-3}" \
+    helm repo add "$name" "$url"
+}
+
+resolve_helm_chart() {
+  local remote_chart="$1"
+  local archive_prefix="$2"
+  local cache_dir
+  local archive=""
+
+  cache_dir="$(helm env HELM_REPOSITORY_CACHE | tr -d '"')"
+  if [[ -d "$cache_dir" ]]; then
+    archive="$(find "$cache_dir" -maxdepth 1 -type f -name "$archive_prefix-*.tgz" -print | sort | tail -n 1)"
+  fi
+  printf '%s\n' "${archive:-$remote_chart}"
+}
+
+deploy_monitoring() {
+  local prometheus_chart
+  local promtail_chart
+
+  info "Configuring Helm repositories"
+  ensure_helm_repo prometheus-community https://prometheus-community.github.io/helm-charts
+  ensure_helm_repo grafana https://grafana.github.io/helm-charts
+  prometheus_chart="$(resolve_helm_chart prometheus-community/kube-prometheus-stack kube-prometheus-stack)"
+  promtail_chart="$(resolve_helm_chart grafana/promtail promtail)"
+
+  info "Deploying Prometheus, Alertmanager, and Grafana from $prometheus_chart"
+  helm upgrade --install prometheus "$prometheus_chart" \
     --namespace monitoring --create-namespace \
     -f "$ROOT_DIR/k8s/monitoring/prometheus-values.yaml" \
     -f "$ROOT_DIR/k8s/monitoring/grafana-values.yaml" \
@@ -354,8 +422,8 @@ deploy_monitoring() {
   info "Deploying Loki"
   kubectl apply -f "$ROOT_DIR/k8s/monitoring/loki.yaml" --context "$KUBE_CONTEXT"
 
-  info "Deploying Promtail"
-  helm upgrade --install promtail grafana/promtail \
+  info "Deploying Promtail from $promtail_chart"
+  helm upgrade --install promtail "$promtail_chart" \
     --namespace monitoring --create-namespace \
     -f "$ROOT_DIR/k8s/monitoring/promtail-values.yaml" \
     --wait --timeout "${OPS_HELM_TIMEOUT:-10m}"
@@ -395,9 +463,45 @@ require_demo_services() {
   fi
 }
 
+retry_command() {
+  local description="$1"
+  local max_attempts="$2"
+  shift 2
+  local attempt
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if "$@"; then
+      return
+    fi
+    if ((attempt < max_attempts)); then
+      warn "$description failed (attempt $attempt/$max_attempts). Retrying..."
+      sleep "${OPS_RETRY_DELAY:-5}"
+    fi
+  done
+
+  die "$description failed after $max_attempts attempts"
+}
+
+ensure_demo_base_image() {
+  local image="${OPS_DEMO_BASE_IMAGE:-eclipse-temurin:17-jre}"
+
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    info "Using cached demo base image $image"
+    return
+  fi
+  info "Pulling demo base image $image"
+  retry_command "Pull demo base image $image" "${OPS_DOCKER_PULL_ATTEMPTS:-3}" \
+    docker pull "$image"
+}
+
 deploy_demo_services() {
   local service
+  local restart_order_forward=false
   local services=(frontend order payment inventory)
+
+  if [[ -f "$PID_DIR/order-service.pid" ]]; then
+    restart_order_forward=true
+  fi
 
   require_kind_cluster
   info "Packaging Java demo services"
@@ -406,9 +510,11 @@ deploy_demo_services() {
     mvn clean package -DskipTests
   )
 
+  ensure_demo_base_image
   for service in "${services[@]}"; do
     info "Building demo-$service:latest"
-    docker build -t "demo-$service:latest" "$ROOT_DIR/demo-services/$service-service"
+    retry_command "Build demo-$service:latest" "${OPS_DOCKER_BUILD_ATTEMPTS:-3}" \
+      docker build -t "demo-$service:latest" "$ROOT_DIR/demo-services/$service-service"
     info "Loading demo-$service:latest into Kind"
     kind load docker-image "demo-$service:latest" --name "$CLUSTER_NAME"
   done
@@ -421,9 +527,16 @@ deploy_demo_services() {
   info "Deploying demo services"
   kubectl apply -f "$ROOT_DIR/k8s/demo-services/" --context "$KUBE_CONTEXT"
   for service in "${services[@]}"; do
+    kubectl rollout restart "deployment/$service-service" -n demo --context "$KUBE_CONTEXT"
+  done
+  for service in "${services[@]}"; do
     kubectl rollout status "deployment/$service-service" -n demo --context "$KUBE_CONTEXT" \
       --timeout="${OPS_KUBECTL_TIMEOUT:-180s}"
   done
+  if [[ "$restart_order_forward" == true ]]; then
+    stop_managed_process order-service
+    start_order_service_forward
+  fi
 }
 
 remove_demo_services() {
@@ -434,8 +547,16 @@ remove_demo_services() {
 }
 
 restart_demo_services() {
+  local restart_order_forward=false
+
+  if [[ -f "$PID_DIR/order-service.pid" ]]; then
+    restart_order_forward=true
+  fi
   remove_demo_services
   deploy_demo_services
+  if [[ "$restart_order_forward" == true ]]; then
+    start_order_service_forward
+  fi
 }
 
 print_managed_process_status() {
@@ -447,14 +568,52 @@ print_managed_process_status() {
   fi
 }
 
+http_healthy() {
+  local url="$1"
+  curl -fsS --max-time 2 "$url" >/dev/null 2>&1
+}
+
 print_http_status() {
   local name="$1"
   local url="$2"
-  if curl -fsS --max-time 2 "$url" >/dev/null 2>&1; then
+  if http_healthy "$url"; then
     printf '  %-16s healthy (%s)\n' "$name" "$url"
   else
     printf '  %-16s unavailable (%s)\n' "$name" "$url"
   fi
+}
+
+require_http_health() {
+  local name="$1"
+  local url="$2"
+
+  if ! http_healthy "$url"; then
+    die "$name is unavailable at $url. Run: ./ops.sh restart"
+    return 1
+  fi
+}
+
+print_demo_target_status() {
+  local result
+
+  if ! http_healthy http://localhost:9090/-/healthy; then
+    printf '  prometheus       unavailable\n'
+    return
+  fi
+
+  if ! result="$(curl -fsSG --max-time 2 http://localhost:9090/api/v1/query \
+    --data-urlencode 'query=up{namespace="demo"}' | python3 -c '
+import json
+import sys
+
+targets = json.load(sys.stdin)["data"]["result"]
+up = sum(sample["value"][1] == "1" for sample in targets)
+print(f"{up}/{len(targets)} targets UP")
+')"; then
+    printf '  prometheus       target query failed\n'
+    return
+  fi
+  printf '  prometheus       %s\n' "$result"
 }
 
 print_configuration_warnings() {
@@ -504,6 +663,7 @@ show_status() {
   printf '\n[Demo services]\n'
   if demo_services_exist; then
     kubectl get deployments -n demo --context "$KUBE_CONTEXT"
+    print_demo_target_status
   else
     printf '  namespace        not deployed\n'
   fi
@@ -580,9 +740,9 @@ stop_environment() {
 }
 
 run_e2e() {
-  print_http_status agent http://localhost:8000/health
-  print_http_status prometheus http://localhost:9090/-/healthy
-  print_http_status order-service http://localhost:8081/actuator/health
+  require_http_health Agent http://localhost:8000/health
+  require_http_health Prometheus http://localhost:9090/-/healthy
+  require_http_health order-service http://localhost:8081/actuator/health
   bash "$ROOT_DIR/tests/e2e_phase1.sh"
 }
 

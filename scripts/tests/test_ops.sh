@@ -183,6 +183,21 @@ test_unmanaged_port_is_rejected() {
   remove_fixture
 }
 
+test_managed_process_detaches_from_launcher_group() {
+  new_fixture
+  source_ops
+  start_managed_process detached "" sleep 30
+  local pid
+  local launcher_group
+  local managed_group
+  pid="$(cat "$PID_DIR/detached.pid")"
+  launcher_group="$(ps -p "$$" -o pgid= | tr -d ' ')"
+  managed_group="$(ps -p "$pid" -o pgid= | tr -d ' ')"
+  assert_not_equal "$managed_group" "$launcher_group" 'managed process detaches from launcher process group'
+  stop_managed_process detached
+  remove_fixture
+}
+
 test_primary_command_dispatch() {
   new_fixture
   source_ops
@@ -286,6 +301,147 @@ test_documentation_recommends_ops_cli() {
   fi
 }
 
+test_e2e_refuses_unhealthy_environment() {
+  new_fixture
+  source_ops
+  http_healthy() {
+    return 1
+  }
+  local output
+  local exit_code
+  set +e
+  output="$(run_e2e 2>&1)"
+  exit_code=$?
+  set -e
+  if [[ "$exit_code" -ne 0 ]]; then
+    pass 'E2E preflight exits non-zero for unhealthy environment'
+  else
+    fail 'E2E preflight exits non-zero for unhealthy environment'
+  fi
+  assert_contains "$output" 'Agent is unavailable' 'E2E preflight names unavailable component'
+  remove_fixture
+}
+
+test_retry_command_recovers_from_transient_failure() {
+  new_fixture
+  source_ops
+  local attempts=0
+  flaky_command() {
+    attempts=$((attempts + 1))
+    [[ "$attempts" -ge 3 ]]
+  }
+
+  OPS_RETRY_DELAY=0 retry_command 'flaky command' 3 flaky_command
+  assert_equal "$attempts" '3' 'retry command recovers after transient failures'
+  remove_fixture
+}
+
+test_existing_helm_repo_does_not_require_network_refresh() {
+  new_fixture
+  source_ops
+  local trace="$FIXTURE/trace"
+  helm_repo_exists() {
+    return 0
+  }
+  retry_command() {
+    printf 'network\n' >>"$trace"
+  }
+
+  ensure_helm_repo prometheus-community https://example.invalid/charts
+  assert_file_missing "$trace" 'existing Helm repository skips network refresh'
+  remove_fixture
+}
+
+test_cached_helm_chart_is_preferred() {
+  new_fixture
+  source_ops
+  local cache="$FIXTURE/helm-cache"
+  mkdir -p "$cache"
+  touch "$cache/kube-prometheus-stack-86.1.0.tgz"
+  helm() {
+    if [[ "$1 $2" == 'env HELM_REPOSITORY_CACHE' ]]; then
+      printf '"%s"\n' "$cache"
+    fi
+  }
+
+  assert_equal "$(resolve_helm_chart prometheus-community/kube-prometheus-stack kube-prometheus-stack)" \
+    "$cache/kube-prometheus-stack-86.1.0.tgz" 'cached Helm chart archive is preferred'
+  remove_fixture
+}
+
+test_demo_deploy_restarts_existing_workloads() {
+  new_fixture
+  mkdir -p "$FIXTURE/demo-services" "$FIXTURE/k8s/demo-services"
+  source_ops
+  local trace="$FIXTURE/trace"
+  require_kind_cluster() {
+    return 0
+  }
+  ensure_demo_base_image() {
+    return 0
+  }
+  retry_command() {
+    shift 2
+    "$@"
+  }
+  mvn() {
+    return 0
+  }
+  docker() {
+    return 0
+  }
+  kind() {
+    return 0
+  }
+  kubectl() {
+    printf '%s\n' "$*" >>"$trace"
+  }
+  stop_managed_process() {
+    printf 'stop:%s\n' "$1" >>"$trace"
+  }
+  start_order_service_forward() {
+    printf 'start:order-service\n' >>"$trace"
+  }
+  printf '12345\n' >"$PID_DIR/order-service.pid"
+
+  deploy_demo_services
+  assert_contains "$(cat "$trace")" 'rollout restart deployment/frontend-service -n demo' \
+    'demo deploy restarts existing frontend workload'
+  assert_contains "$(cat "$trace")" 'rollout restart deployment/order-service -n demo' \
+    'demo deploy restarts existing order workload'
+  assert_contains "$(cat "$trace")" 'rollout restart deployment/payment-service -n demo' \
+    'demo deploy restarts existing payment workload'
+  assert_contains "$(cat "$trace")" 'rollout restart deployment/inventory-service -n demo' \
+    'demo deploy restarts existing inventory workload'
+  assert_contains "$(cat "$trace")" 'stop:order-service' \
+    'demo deploy stops stale order forward after rollout'
+  assert_contains "$(cat "$trace")" 'start:order-service' \
+    'demo deploy recreates order forward after rollout'
+  remove_fixture
+}
+
+test_demo_restart_restores_order_forward() {
+  new_fixture
+  source_ops
+  local trace="$FIXTURE/trace"
+  remove_demo_services() {
+    rm -f "$PID_DIR/order-service.pid"
+    printf 'remove-demo\n' >>"$trace"
+  }
+  deploy_demo_services() {
+    printf 'deploy-demo\n' >>"$trace"
+  }
+  start_order_service_forward() {
+    printf 'start:order-service\n' >>"$trace"
+  }
+  printf '12345\n' >"$PID_DIR/order-service.pid"
+
+  restart_demo_services
+  assert_contains "$(cat "$trace")" 'start:order-service' \
+    'demo restart restores order forward'
+  remove_fixture
+}
+
 run_all() {
   test_usage_lists_primary_commands
   test_init_env_file_copies_example
@@ -294,10 +450,17 @@ run_all() {
   test_managed_process_lifecycle
   test_stale_pid_is_replaced_when_starting
   test_unmanaged_port_is_rejected
+  test_managed_process_detaches_from_launcher_group
   test_primary_command_dispatch
   test_demo_command_dispatch
   test_missing_dependency_prints_platform_hint
   test_documentation_recommends_ops_cli
+  test_e2e_refuses_unhealthy_environment
+  test_retry_command_recovers_from_transient_failure
+  test_existing_helm_repo_does_not_require_network_refresh
+  test_cached_helm_chart_is_preferred
+  test_demo_deploy_restarts_existing_workloads
+  test_demo_restart_restores_order_forward
 
   printf '\nTests: %s passed, %s failed\n' "$PASS_COUNT" "$FAIL_COUNT"
   [[ "$FAIL_COUNT" -eq 0 ]]
