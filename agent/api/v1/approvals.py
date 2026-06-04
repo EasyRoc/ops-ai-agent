@@ -10,6 +10,13 @@ from agent.db.crud import AsyncSessionLocal, get_incident, get_session, update_i
 logger = logging.getLogger("ops-agent.api.approvals")
 router = APIRouter(prefix="/api/v1")
 
+APPROVAL_DISPLAY = {
+    "approved": ("已批准执行", "green"),
+    "rejected": ("已拒绝", "red"),
+    "escalated": ("已转人工", "orange"),
+    "pending": ("待审批", "blue"),
+}
+
 
 def _callback_type(body: dict) -> str:
     if body.get("challenge"):
@@ -45,6 +52,59 @@ def extract_card_action_value(body: dict) -> dict:
         return body.get("event", {}).get("action", {}).get("value", {})
     logger.warning("未识别的飞书卡片回调结构: callback_type=%s", callback_type)
     return {}
+
+
+def extract_message_id(body: dict) -> str:
+    """Extract Feishu message id from card callback payloads."""
+    event = body.get("event", {})
+    context = event.get("context", {})
+    message_id = (
+        body.get("open_message_id")
+        or body.get("message_id")
+        or context.get("open_message_id")
+        or context.get("message_id")
+        or event.get("open_message_id")
+        or event.get("message_id")
+    )
+    logger.info("提取飞书消息ID: message_id=%s", message_id or "-")
+    return message_id or ""
+
+
+def extract_operator(body: dict) -> str:
+    """Extract a readable operator id from old and new Feishu callback payloads."""
+    operator = body.get("operator") or body.get("event", {}).get("operator", {})
+    operator_id = (
+        operator.get("name")
+        or operator.get("open_id")
+        or operator.get("user_id")
+        or operator.get("union_id")
+    )
+    logger.info("提取飞书审批操作人: operator=%s", operator_id or "-")
+    return operator_id or "未知"
+
+
+def build_approval_result_card(incident_id: str, approval_status: str, operator: str) -> dict:
+    """Build a result card without any action buttons."""
+    from agent.templates import render_card
+
+    approval_text, result_color = APPROVAL_DISPLAY.get(
+        approval_status,
+        (approval_status or "未知", "blue"),
+    )
+    logger.info(
+        "构建审批结果卡片: incident=%s, approval_status=%s, operator=%s",
+        incident_id,
+        approval_status,
+        operator,
+    )
+    return render_card(
+        "approval_result_card",
+        incident_id=incident_id,
+        result_color=result_color,
+        approval_text=approval_text,
+        operator=operator,
+        comment="审批状态已写入 Incident，原操作按钮已失效。",
+    )
 
 
 @router.post("/approvals/callback")
@@ -124,13 +184,39 @@ async def _update_incident_status(incident_id: str, approval_status: str) -> Non
 
 
 async def _update_feishu_card(body: dict, incident_id: str, approval_status: str) -> None:
-    """Placeholder for updating the original Feishu card after approval."""
+    """Replace the original interactive card with an approval result card."""
+    from agent.channels.feishu import update_card
+
     logger.info("进入 _update_feishu_card: incident=%s, status=%s", incident_id, approval_status)
+    message_id = extract_message_id(body)
+    if not message_id:
+        logger.warning(
+            "无法更新飞书原卡片，回调中缺少消息ID: incident=%s, status=%s",
+            incident_id,
+            approval_status,
+        )
+        return
+
+    operator = extract_operator(body)
+    card = build_approval_result_card(incident_id, approval_status, operator)
+    try:
+        result = await update_card(message_id, card)
+    except Exception as exc:
+        logger.error(
+            "飞书原卡片更新异常: incident=%s, message_id=%s, error=%s",
+            incident_id,
+            message_id,
+            exc,
+            exc_info=True,
+        )
+        return
+
     logger.info(
-        "审批回调已处理，等待后续接入飞书卡片更新: incident=%s, status=%s, open_id=%s",
+        "飞书原卡片已更新为审批结果: incident=%s, status=%s, message_id=%s, code=%s",
         incident_id,
         approval_status,
-        body.get("operator", {}).get("open_id") or body.get("event", {}).get("operator", {}).get("open_id"),
+        message_id,
+        result.get("code"),
     )
 
 
