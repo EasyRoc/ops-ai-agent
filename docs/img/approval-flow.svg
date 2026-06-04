@@ -1,0 +1,85 @@
+<svg width="1200" height="520" viewBox="0 0 1200 520" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">告警诊断与审批流程</title>
+  <desc id="desc">展示告警从触发、诊断、生成方案、飞书审批到状态更新的流程。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="520" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#F8FAFC"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2L10 6L2 10" stroke="#0EA5E9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0F172A" flood-opacity="0.10"/>
+    </filter>
+    <style>
+      .title { font: 700 30px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0F172A; }
+      .subtitle { font: 400 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748B; }
+      .step { fill: #FFFFFF; stroke: #BAE6FD; stroke-width: 1.6; filter: url(#shadow); }
+      .step-warn { fill: #FFF7ED; stroke: #FDBA74; }
+      .step-ok { fill: #ECFDF5; stroke: #86EFAC; }
+      .step-purple { fill: #F5F3FF; stroke: #C4B5FD; }
+      .label { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1E293B; }
+      .small { font: 400 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748B; }
+      .num { font: 800 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0284C7; }
+      .arrow { stroke: #0EA5E9; stroke-width: 2.2; marker-end: url(#arrow); }
+      .result { font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #047857; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="520" rx="28" fill="url(#bg)"/>
+  <text x="48" y="58" class="title">告警诊断与人工审批闭环</text>
+  <text x="48" y="86" class="subtitle">Phase 2 只生成方案和审批状态，不自动执行 Kubernetes 变更</text>
+
+  <rect x="52" y="150" width="160" height="104" rx="18" class="step step-warn"/>
+  <text x="80" y="184" class="num">01</text>
+  <text x="80" y="214" class="label">告警触发</text>
+  <text x="80" y="238" class="small">Prometheus Rule</text>
+
+  <rect x="252" y="150" width="170" height="104" rx="18" class="step"/>
+  <text x="280" y="184" class="num">02</text>
+  <text x="280" y="214" class="label">接收 Webhook</text>
+  <text x="280" y="238" class="small">创建 / 去重 Incident</text>
+
+  <rect x="462" y="150" width="170" height="104" rx="18" class="step"/>
+  <text x="490" y="184" class="num">03</text>
+  <text x="490" y="214" class="label">采集上下文</text>
+  <text x="490" y="238" class="small">指标、日志、Pod、CMDB</text>
+
+  <rect x="672" y="150" width="170" height="104" rx="18" class="step step-purple"/>
+  <text x="700" y="184" class="num">04</text>
+  <text x="700" y="214" class="label">根因分析</text>
+  <text x="700" y="238" class="small">DeepSeek / 规则兜底</text>
+
+  <rect x="882" y="150" width="170" height="104" rx="18" class="step step-purple"/>
+  <text x="910" y="184" class="num">05</text>
+  <text x="910" y="214" class="label">方案与风险</text>
+  <text x="910" y="238" class="small">Runbook + Risk</text>
+
+  <path d="M212 202H252" class="arrow"/>
+  <path d="M422 202H462" class="arrow"/>
+  <path d="M632 202H672" class="arrow"/>
+  <path d="M842 202H882" class="arrow"/>
+
+  <path d="M967 254C967 310 922 332 852 332H768" class="arrow"/>
+
+  <rect x="592" y="298" width="176" height="112" rx="18" class="step step-warn"/>
+  <text x="620" y="332" class="num">06</text>
+  <text x="620" y="362" class="label">飞书审批</text>
+  <text x="620" y="386" class="small">批准 / 拒绝 / 转人工</text>
+
+  <rect x="332" y="298" width="176" height="112" rx="18" class="step step-ok"/>
+  <text x="360" y="332" class="num">07</text>
+  <text x="360" y="362" class="label">状态落库</text>
+  <text x="360" y="386" class="small">approval_status 更新</text>
+
+  <rect x="92" y="298" width="176" height="112" rx="18" class="step step-ok"/>
+  <text x="120" y="332" class="num">08</text>
+  <text x="120" y="362" class="label">卡片变更</text>
+  <text x="120" y="386" class="small">按钮替换为审批结果</text>
+
+  <path d="M592 354H508" class="arrow"/>
+  <path d="M332 354H268" class="arrow"/>
+
+  <text x="592" y="454" class="result">结果：人确认，系统记录；Agent 暂不自动执行命令。</text>
+</svg>
