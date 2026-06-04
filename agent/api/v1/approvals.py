@@ -50,9 +50,9 @@ def extract_card_action_value(body: dict) -> dict:
 @router.post("/approvals/callback")
 async def approval_callback(request: Request, background_tasks: BackgroundTasks):
     """Handle Feishu interactive card callbacks for manual approval."""
-    logger.info("进入 approval_callback: 飞书卡片审批回调")
     body = await request.json()
     headers = dict(request.headers)
+    logger.info("进入 approval_callback: 飞书卡片审批回调, headers=%s, body=%s", headers, body)
     callback_type = _callback_type(body)
     logger.info(
         "收到飞书审批回调: callback_type=%s, content_type=%s, has_challenge=%s",
