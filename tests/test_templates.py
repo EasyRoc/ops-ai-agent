@@ -12,6 +12,10 @@ class CardTemplateTest(TestCase):
             alert_title="[P2] order-service - HighCPUUsage",
             severity_color="yellow",
             root_cause='CPU "hot"',
+            action_plan='1. [中风险] 扩容 order-service\n`kubectl scale deployment order-service -n demo --replicas=4`',
+            risk_level="中风险",
+            risk_score="40",
+            risk_warnings="核心服务 order-service，影响范围较大",
             evidence_list=evidence,
             confidence="40",
             incident_id="INC-TEST",
@@ -20,4 +24,8 @@ class CardTemplateTest(TestCase):
         )
 
         self.assertEqual(card["elements"][0]["content"], '**根因判断：**\nCPU "hot"')
-        self.assertEqual(card["elements"][2]["content"], f"**证据：**\n{evidence}")
+        self.assertIn("扩容 order-service", card["elements"][2]["content"])
+        self.assertEqual(card["elements"][6]["content"], f"**证据：**\n{evidence}")
+        self.assertEqual(card["elements"][10]["tag"], "action")
+        self.assertEqual(card["elements"][10]["actions"][0]["value"]["action"], "approve")
+        self.assertEqual(card["elements"][10]["actions"][0]["value"]["incident_id"], "INC-TEST")

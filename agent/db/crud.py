@@ -1,6 +1,6 @@
 import logging
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from agent.config import settings
 from agent.db.models import Incident, Execution, Report, AuditLog
@@ -14,6 +14,20 @@ AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 async def get_session() -> AsyncSession:
     async with AsyncSessionLocal() as session:
         yield session
+
+
+async def ensure_phase2_schema() -> None:
+    """Apply lightweight idempotent schema additions for existing local databases."""
+    statements = [
+        "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS runbook_name VARCHAR(128)",
+        "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS action_plan JSONB",
+        "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS risk_assessment JSONB",
+        "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS approval_status VARCHAR(32)",
+    ]
+    async with engine.begin() as connection:
+        for statement in statements:
+            await connection.execute(text(statement))
+    logger.info("Phase 2 schema ensured")
 
 
 async def create_incident(session: AsyncSession, incident: Incident) -> Incident:

@@ -1,0 +1,72 @@
+from unittest import IsolatedAsyncioTestCase, TestCase
+from unittest.mock import AsyncMock, patch
+
+from fastapi import BackgroundTasks
+
+from agent.api.v1.approvals import approval_callback, parse_card_action
+from agent.channels.feishu import handle_card_action, verify_card_callback
+
+
+class _JSONRequest:
+    def __init__(self, body):
+        self._body = body
+        self.headers = {}
+
+    async def json(self):
+        return self._body
+
+
+class FeishuApprovalHelpersTest(IsolatedAsyncioTestCase):
+    async def test_verify_card_callback_accepts_challenge_and_card_action(self):
+        self.assertTrue(await verify_card_callback({}, {"challenge": "abc"}))
+        self.assertTrue(await verify_card_callback({}, {"type": "card_action"}))
+        self.assertFalse(await verify_card_callback({}, {"type": "event_callback"}))
+
+    async def test_handle_card_action_maps_to_approval_status(self):
+        self.assertEqual(await handle_card_action("approve", "INC-1"), "approved")
+        self.assertEqual(await handle_card_action("reject", "INC-1"), "rejected")
+        self.assertEqual(await handle_card_action("escalate", "INC-1"), "escalated")
+        self.assertEqual(await handle_card_action("unknown", "INC-1"), "pending")
+
+
+class ApprovalCallbackTest(IsolatedAsyncioTestCase):
+    async def test_callback_returns_challenge(self):
+        response = await approval_callback(_JSONRequest({"challenge": "challenge-token"}), BackgroundTasks())
+
+        self.assertEqual(response, {"challenge": "challenge-token"})
+
+    async def test_callback_updates_incident_status_from_button_value(self):
+        background_tasks = BackgroundTasks()
+
+        with (
+            patch("agent.api.v1.approvals._update_incident_status", new=AsyncMock()) as update_status,
+            patch("agent.api.v1.approvals._update_feishu_card", new=AsyncMock()),
+        ):
+            response = await approval_callback(
+                _JSONRequest(
+                    {
+                        "type": "card_action",
+                        "action": {
+                            "value": '{"action":"approve","incident_id":"INC-PHASE2"}',
+                        },
+                    }
+                ),
+                background_tasks,
+            )
+            for task in background_tasks.tasks:
+                await task()
+
+        self.assertEqual(response["approval_status"], "approved")
+        update_status.assert_awaited_once_with("INC-PHASE2", "approved")
+
+
+class CardActionParserTest(TestCase):
+    def test_parse_card_action_accepts_json_string_or_dict(self):
+        self.assertEqual(
+            parse_card_action('{"action":"reject","incident_id":"INC-1"}'),
+            {"action": "reject", "incident_id": "INC-1"},
+        )
+        self.assertEqual(
+            parse_card_action({"action": "escalate", "incident_id": "INC-2"}),
+            {"action": "escalate", "incident_id": "INC-2"},
+        )

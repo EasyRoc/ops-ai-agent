@@ -30,6 +30,10 @@ async def list_incidents_endpoint(status: str = None, limit: int = 50, db: Async
                 "alert_name": i.alert_name,
                 "root_cause": i.root_cause,
                 "confidence": i.confidence,
+                "runbook_name": i.runbook_name,
+                "action_plan": i.action_plan,
+                "risk_assessment": i.risk_assessment,
+                "approval_status": i.approval_status,
                 "created_at": i.created_at.isoformat() if i.created_at else None,
             }
             for i in incidents
@@ -56,6 +60,10 @@ async def get_incident_endpoint(incident_id: str, db: AsyncSession = Depends(get
         "root_cause": incident.root_cause,
         "confidence": incident.confidence,
         "evidence": incident.evidence,
+        "runbook_name": incident.runbook_name,
+        "action_plan": incident.action_plan,
+        "risk_assessment": incident.risk_assessment,
+        "approval_status": incident.approval_status,
         "created_at": incident.created_at.isoformat() if incident.created_at else None,
         "updated_at": incident.updated_at.isoformat() if incident.updated_at else None,
     }

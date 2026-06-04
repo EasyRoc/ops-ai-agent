@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>事件详情 - Ops AI Agent</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #f7f8fb;
+      color: #202733;
+    }
+    header {
+      padding: 24px 36px;
+      background: #111827;
+      color: white;
+    }
+    main { padding: 28px 36px; max-width: 1100px; }
+    a { color: #2563eb; text-decoration: none; font-weight: 700; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      margin: 18px 0;
+    }
+    .card {
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
+    }
+    .muted { color: #667085; }
+    .badge {
+      display: inline-block;
+      padding: 5px 10px;
+      border-radius: 999px;
+      background: #e0e7ff;
+      color: #3730a3;
+      font-weight: 700;
+    }
+    .pending_approval { background: #fef3c7; color: #92400e; }
+    .approved { background: #d1fae5; color: #065f46; }
+    .rejected { background: #fee2e2; color: #991b1b; }
+    pre {
+      white-space: pre-wrap;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 12px;
+      border-radius: 10px;
+      overflow: auto;
+    }
+    button {
+      border: 0;
+      border-radius: 8px;
+      padding: 10px 14px;
+      margin-right: 8px;
+      cursor: pointer;
+      color: white;
+      font-weight: 700;
+    }
+    .approve { background: #059669; }
+    .reject { background: #dc2626; }
+    .escalate { background: #4b5563; }
+    li { margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/">← 返回事件列表</a>
+    <h1 id="title">事件详情</h1>
+    <p id="subtitle" class="muted"></p>
+  </header>
+  <main>
+    <section class="grid">
+      <div class="card">
+        <h3>基础信息</h3>
+        <div id="baseInfo"></div>
+      </div>
+      <div class="card">
+        <h3>风险评估</h3>
+        <div id="riskInfo"></div>
+      </div>
+      <div class="card">
+        <h3>人工审批</h3>
+        <p>当前状态：<span id="approval" class="badge">-</span></p>
+        <p class="muted">本地调试时可用下面按钮模拟飞书审批回调。</p>
+        <button class="approve" onclick="submitApproval('approve')">批准执行</button>
+        <button class="reject" onclick="submitApproval('reject')">拒绝</button>
+        <button class="escalate" onclick="submitApproval('escalate')">转人工</button>
+        <p id="approvalResult" class="muted"></p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>根因判断</h3>
+      <p id="rootCause"></p>
+      <pre id="evidence"></pre>
+    </section>
+
+    <section class="card">
+      <h3>Runbook 处置方案</h3>
+      <p id="runbookName" class="muted"></p>
+      <ol id="actionPlan"></ol>
+    </section>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const incidentId = params.get("id");
+    let currentIncident = null;
+
+    function statusText(value) {
+      const map = {
+        pending_approval: "待审批",
+        pending: "待审批",
+        approved: "已批准",
+        rejected: "已拒绝",
+        escalated: "已转人工",
+        diagnosed: "已诊断"
+      };
+      return map[value] || value || "-";
+    }
+
+    function setApproval(value) {
+      const el = document.getElementById("approval");
+      el.textContent = statusText(value);
+      el.className = `badge ${value || ""}`;
+    }
+
+    async function loadIncident() {
+      if (!incidentId) {
+        document.getElementById("title").textContent = "缺少事件 ID";
+        return;
+      }
+      const response = await fetch(`/api/v1/incidents/${encodeURIComponent(incidentId)}`);
+      if (!response.ok) {
+        document.getElementById("title").textContent = `事件不存在：${incidentId}`;
+        return;
+      }
+      currentIncident = await response.json();
+      document.getElementById("title").textContent = currentIncident.id;
+      document.getElementById("subtitle").textContent = `${currentIncident.service || "-"} / ${currentIncident.alert_name || "-"} / ${currentIncident.severity || "-"}`;
+      document.getElementById("baseInfo").innerHTML = `
+        <p>服务：${currentIncident.service || "-"}</p>
+        <p>环境：${currentIncident.env || "-"}</p>
+        <p>状态：${statusText(currentIncident.status)}</p>
+        <p>创建时间：${currentIncident.created_at ? new Date(currentIncident.created_at).toLocaleString() : "-"}</p>
+      `;
+      const risk = currentIncident.risk_assessment || {};
+      document.getElementById("riskInfo").innerHTML = `
+        <p>等级：${risk.level || "未评估"}</p>
+        <p>分数：${risk.score ?? "-"}</p>
+        <p>是否允许：${risk.allowed === false ? "否" : "是"}</p>
+      `;
+      setApproval(currentIncident.approval_status || currentIncident.status);
+      document.getElementById("rootCause").textContent = currentIncident.root_cause || "暂无诊断结果";
+      document.getElementById("evidence").textContent = (currentIncident.evidence || []).join("\\n") || "暂无证据";
+      document.getElementById("runbookName").textContent = currentIncident.runbook_name || "未匹配到 Runbook";
+      document.getElementById("actionPlan").innerHTML = (currentIncident.action_plan || []).map((step) => `
+        <li>
+          <strong>[${step.risk_level || "-"}]</strong> ${step.description || ""}
+          ${step.command ? `<pre>${step.command}</pre>` : ""}
+        </li>
+      `).join("") || "<li>暂无处置方案</li>";
+    }
+
+    async function submitApproval(action) {
+      if (!incidentId) return;
+      const response = await fetch("/api/v1/approvals/callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "card_action",
+          action: {
+            value: { action, incident_id: incidentId }
+          }
+        })
+      });
+      const data = await response.json();
+      document.getElementById("approvalResult").textContent = `审批接口返回：${data.status}`;
+      if (data.approval_status) {
+        setApproval(data.approval_status);
+      }
+    }
+
+    loadIncident();
+  </script>
+</body>
+</html>

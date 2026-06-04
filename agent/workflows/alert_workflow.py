@@ -11,6 +11,9 @@ class AlertState(TypedDict):
     alert_parsed: Optional[dict] # 解析后的告警结构化字段（service、env、severity 等）
     context: Optional[dict]     # collect_context 采集的可观测性数据（metrics、logs、pods、cmdb）
     diagnosis: Optional[dict]   # diagnose 节点输出的根因分析结果（root_cause、confidence、evidence）
+    runbook: Optional[dict]     # Phase 2: 匹配到的 Runbook 和结构化处置步骤
+    risk_assessment: Optional[dict]  # Phase 2: 处置方案风险评估
+    approval_status: Optional[str]   # Phase 2: pending / approved / rejected / escalated
     error: Optional[str]        # 任意节点异常时写入，触发工作流提前终止
 
 
