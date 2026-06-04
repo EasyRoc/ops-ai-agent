@@ -6,7 +6,11 @@ logger = logging.getLogger("ops-agent.supervisor")
 
 
 async def run_alert_workflow(alert_raw: dict) -> dict:
-    """Run the full alert-handling workflow, return final diagnosis result"""
+    """运行完整告警处理工作流并返回最终状态
+
+    主要用于测试或内部直接调用；线上 Webhook 路径在 `api/v1/alerts.py`
+    中构造同样的初始状态。
+    """
     alert_name = alert_raw.get("alertname", "unknown")
     service = alert_raw.get("service", "unknown")
     logger.info(f"启动告警工作流: 告警={alert_name}, 服务={service}")
@@ -19,6 +23,9 @@ async def run_alert_workflow(alert_raw: dict) -> dict:
         "alert_parsed": None,
         "context": None,
         "diagnosis": None,
+        "runbook": None,
+        "risk_assessment": None,
+        "approval_status": None,
         "error": None,
     }
 
@@ -28,7 +35,7 @@ async def run_alert_workflow(alert_raw: dict) -> dict:
 
 
 async def collect_context_for_incident(state: AlertState) -> AlertState:
-    """Collect observability context data for the alert"""
+    """采集指标、日志、K8s 状态和服务元数据，供根因分析使用"""
     from agent.tools.prometheus import query_service_metrics
     from agent.tools.loki import query_service_logs
     from agent.tools.kubernetes import get_service_pods
@@ -43,25 +50,43 @@ async def collect_context_for_incident(state: AlertState) -> AlertState:
     errors = []
 
     try:
+        logger.info("上下文采集: 查询 Prometheus 指标开始 [%s]", service)
         metrics = await query_service_metrics(service)
+        logger.info("上下文采集: Prometheus 指标完成 [%s], keys=%s", service, list(metrics.keys()))
     except Exception as e:
         logger.error(f"Prometheus 查询失败 [{service}]: {e}")
         errors.append(f"prometheus: {e}")
 
     try:
+        logger.info("上下文采集: 查询 Loki 日志开始 [%s]", service)
         logs = await query_service_logs(service)
+        logger.info("上下文采集: Loki 日志完成 [%s], lines=%s", service, len(logs))
     except Exception as e:
         logger.error(f"Loki 查询失败 [{service}]: {e}")
         errors.append(f"loki: {e}")
 
     try:
+        logger.info("上下文采集: 查询 Kubernetes Pod 开始 [%s]", service)
         pods = await get_service_pods(service, namespace="demo")
+        logger.info(
+            "上下文采集: Kubernetes Pod 完成 [%s], ready=%s/%s",
+            service,
+            pods.get("ready", 0),
+            pods.get("total", 0),
+        )
     except Exception as e:
         logger.error(f"K8s 查询失败 [{service}]: {e}")
         errors.append(f"k8s: {e}")
 
     try:
+        logger.info("上下文采集: 查询 CMDB 开始 [%s]", service)
         cmdb_info = await get_service_info(service)
+        logger.info(
+            "上下文采集: CMDB 完成 [%s], owner=%s, team=%s",
+            service,
+            cmdb_info.get("owner", "-"),
+            cmdb_info.get("team", "-"),
+        )
     except Exception as e:
         logger.error(f"CMDB 查询失败 [{service}]: {e}")
         errors.append(f"cmdb: {e}")

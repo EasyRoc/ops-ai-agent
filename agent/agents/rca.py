@@ -7,6 +7,8 @@ from agent.workflows.alert_workflow import AlertState
 
 logger = logging.getLogger("ops-agent.rca")
 
+# 这个 prompt 只要求 LLM 输出根因、置信度和证据。
+# Runbook 匹配与风险评估由规则模块完成，避免 LLM 直接生成不可控命令。
 RCA_SYSTEM_PROMPT = """你是一个 SRE 根因分析专家。根据告警信息和采集到的可观测性数据，分析导致告警的根本原因。
 
 分析原则:
@@ -20,7 +22,7 @@ RCA_SYSTEM_PROMPT = """你是一个 SRE 根因分析专家。根据告警信息�
 
 
 def _build_diagnosis_prompt(context: dict, alert: dict) -> str:
-    """构建 LLM 诊断提示词"""
+    """根据采集的可观测性上下文构建根因分析提示词"""
     metrics = context.get("metrics", {})
     logs = context.get("logs", [])
     pods = context.get("pods", {})
@@ -35,6 +37,14 @@ def _build_diagnosis_prompt(context: dict, alert: dict) -> str:
     # 只取前20条日志避免 prompt 过长
     log_lines = [l.get("line", "") for l in logs[:20]]
     log_text = "\n".join(f"  - {line}" for line in log_lines) if log_lines else "  无错误日志"
+    logger.info(
+        "构建诊断 Prompt: alert=%s, service=%s, metrics=%s, logs=%s, pods=%s",
+        alert.get("alertname", "未知"),
+        alert.get("service", "未知"),
+        list(metrics.keys()),
+        len(logs),
+        pods.get("total", 0),
+    )
 
     return f"""请分析以下告警并给出根因诊断。
 
@@ -67,29 +77,63 @@ def _build_diagnosis_prompt(context: dict, alert: dict) -> str:
 
 
 async def analyze_root_cause(state: AlertState) -> AlertState:
-    """使用 LLM 进行根因分析"""
+    """执行根因分析，生成处置方案，持久化结果并通知飞书
+
+    这是 diagnose 节点的主入口，分四步：
+    1. LLM / 规则兜底生成根因；
+    2. Runbook + Risk 生成处置建议；
+    3. 保存 Incident；
+    4. 推送诊断卡片。
+    """
     context = state.get("context", {})
     alert = state.get("alert_parsed", {})
     incident_id = state.get("incident_id")
 
     if not context or not incident_id:
-        logger.warning("根因分析跳过: 缺少上下文或工单ID")
+        logger.warning(
+            "根因分析跳过: has_context=%s, incident_id=%s",
+            bool(context),
+            incident_id or "-",
+        )
         return state
 
     alert_name = alert.get("alertname", "")
-    logger.info(f"根因分析: LLM 诊断中 ({alert_name})")
+    logger.info(
+        "进入根因分析: incident=%s, alert=%s, service=%s, severity=%s",
+        incident_id,
+        alert_name,
+        alert.get("service", "unknown"),
+        alert.get("severity", "P3"),
+    )
 
     try:
         diagnosis = await _diagnose_with_llm(context, alert)
     except Exception as e:
-        logger.error(f"LLM 诊断失败，回退到规则诊断: {e}")
+        logger.error("LLM 诊断失败，回退到规则诊断: error=%s", e)
         diagnosis = _diagnose_fallback(context, alert)
+    logger.info(
+        "根因诊断阶段完成: incident=%s, confidence=%s, evidence_count=%s",
+        incident_id,
+        diagnosis.get("confidence"),
+        len(diagnosis.get("evidence", [])),
+    )
 
+    # Phase 2 的关键边界：Agent 只产出处置方案和风险结论，不自动执行命令。
     runbook, risk_assessment = _build_action_plan(context, alert)
     if runbook:
         state["runbook"] = runbook
         state["risk_assessment"] = risk_assessment
         state["approval_status"] = "pending"
+        logger.info(
+            "处置方案已生成: incident=%s, runbook=%s, steps=%s, risk=%s/%s",
+            incident_id,
+            runbook.get("name"),
+            len(runbook.get("steps", [])),
+            risk_assessment.get("level") if risk_assessment else "-",
+            risk_assessment.get("score") if risk_assessment else "-",
+        )
+    else:
+        logger.info("未生成处置方案: incident=%s, alert=%s", incident_id, alert_name)
 
     try:
         await _save_diagnosis(
@@ -108,24 +152,34 @@ async def analyze_root_cause(state: AlertState) -> AlertState:
         )
         state["diagnosis"] = diagnosis
         logger.info(
-            f"诊断完成: 工单={incident_id}, "
-            f"根因={diagnosis['root_cause']}, "
-            f"置信度={diagnosis['confidence']}"
+            "诊断完成: incident=%s, root_cause=%s, confidence=%s, approval_status=%s",
+            incident_id,
+            diagnosis["root_cause"],
+            diagnosis["confidence"],
+            state.get("approval_status") or "-",
         )
     except Exception as e:
-        logger.error(f"根因分析失败: {e}", exc_info=True)
+        logger.error("根因分析结果保存或通知失败: incident=%s, error=%s", incident_id, e, exc_info=True)
         state["error"] = str(e)
 
     return state
 
 
 def _build_action_plan(context: dict, alert: dict) -> tuple[dict | None, dict | None]:
+    """构建结构化的 Runbook 处置方案及其风险评估"""
     from agent.agents.risk import evaluate_risk
     from agent.agents.runbook import load_runbook, render_runbook
 
     alert_name = alert.get("alertname", "")
+    logger.info(
+        "开始生成处置方案: alert=%s, service=%s, env=%s",
+        alert_name,
+        alert.get("service", "unknown"),
+        alert.get("env", "prod"),
+    )
     runbook = load_runbook(alert_name)
     if not runbook:
+        logger.info("处置方案生成跳过: 未匹配 Runbook, alert=%s", alert_name)
         return None, None
 
     rendered_steps = render_runbook(
@@ -142,6 +196,13 @@ def _build_action_plan(context: dict, alert: dict) -> tuple[dict | None, dict | 
         alert.get("service", ""),
         alert.get("env", "prod"),
     )
+    logger.info(
+        "处置方案生成完成: runbook=%s, steps=%s, risk_level=%s, allowed=%s",
+        runbook.name,
+        len(rendered_steps),
+        risk_assessment.get("level"),
+        risk_assessment.get("allowed"),
+    )
     return {
         "name": runbook.name,
         "steps": [step.to_dict() for step in rendered_steps],
@@ -149,15 +210,15 @@ def _build_action_plan(context: dict, alert: dict) -> tuple[dict | None, dict | 
 
 
 async def _diagnose_with_llm(context: dict, alert: dict) -> dict:
-    """调用 LLM 进行根因分析"""
+    """调用 LLM 并将 JSON 响应归一化为诊断结构"""
     from agent.llm.client import chat_json
 
     prompt = _build_diagnosis_prompt(context, alert)
-    logger.info(f"LLM 诊断提示词长度: {len(prompt)} 字符")
+    logger.info("调用 LLM 根因分析: alert=%s, prompt_length=%s", alert.get("alertname"), len(prompt))
 
     result = await chat_json(prompt, system=RCA_SYSTEM_PROMPT)
 
-    # 校验返回格式
+    # LLM 返回内容必须归一化，避免下游卡片渲染和数据库保存拿到缺失字段。
     diagnosis = {
         "root_cause": result.get("root_cause", "LLM 未返回有效诊断"),
         "confidence": float(result.get("confidence", 0.3)),
@@ -170,7 +231,7 @@ async def _diagnose_with_llm(context: dict, alert: dict) -> dict:
 
 
 def _diagnose_fallback(context: dict, alert: dict) -> dict:
-    """LLM 不可用时的规则兜底诊断"""
+    """LLM 不可用时使用的规则兜底诊断"""
     metrics = context.get("metrics", {})
     pods = context.get("pods", {})
 
@@ -181,21 +242,31 @@ def _diagnose_fallback(context: dict, alert: dict) -> dict:
     all_healthy = ready_pods == total_pods and total_pods > 0
     alert_name = alert.get("alertname", "未知")
 
-    logger.info(f"规则兜底诊断: cpu={cpu_current:.1f}%, qps={qps_current:.1f}, pod={ready_pods}/{total_pods}")
+    logger.info(
+        "进入规则兜底诊断: alert=%s, cpu=%.1f%%, qps=%.1f, pod=%s/%s",
+        alert_name,
+        cpu_current,
+        qps_current,
+        ready_pods,
+        total_pods,
+    )
 
     if "CPU" in alert_name.upper() and qps_current > 100 and all_healthy:
+        logger.info("规则兜底命中: 流量上涨导致资源不足")
         return {
             "root_cause": "流量上涨导致服务资源不足",
             "confidence": 0.85,
             "evidence": [f"CPU {cpu_current:.1f}%, QPS {qps_current:.1f}, 所有Pod健康", "判断为流量驱动型资源不足"],
         }
     elif "CPU" in alert_name.upper() and not all_healthy and qps_current < 50:
+        logger.info("规则兜底命中: 单实例异常或代码死循环")
         return {
             "root_cause": "单实例异常或代码死循环",
             "confidence": 0.70,
             "evidence": [f"仅 {ready_pods}/{total_pods} Pod就绪, QPS {qps_current:.1f}", "判断为单实例故障"],
         }
     else:
+        logger.info("规则兜底未命中强规则: 使用低置信度人工确认结果")
         return {
             "root_cause": f"收到 {alert_name} 告警（LLM不可用，规则兜底）",
             "confidence": 0.30,
@@ -210,7 +281,7 @@ async def _save_diagnosis(
     risk_assessment: dict | None = None,
     approval_status: str | None = None,
 ):
-    """Persist root_cause, confidence, evidence and update status to DB."""
+    """将诊断结果和处置方案字段持久化到工单"""
     updates = {
         "root_cause": diagnosis.get("root_cause"),
         "confidence": diagnosis.get("confidence"),
@@ -225,9 +296,15 @@ async def _save_diagnosis(
     if approval_status:
         updates["approval_status"] = approval_status
 
+    logger.info(
+        "保存诊断结果: incident=%s, status=%s, fields=%s",
+        incident_id,
+        updates.get("status"),
+        list(updates.keys()),
+    )
     async with AsyncSessionLocal() as session:
         await update_incident(session, incident_id, **updates)
-        logger.info(f"诊断结果已保存到数据库: 工单={incident_id}")
+        logger.info("诊断结果已保存到数据库: incident=%s", incident_id)
 
 
 async def _notify_diagnosis(
@@ -237,7 +314,7 @@ async def _notify_diagnosis(
     runbook: dict | None = None,
     risk_assessment: dict | None = None,
 ):
-    """Push a diagnosis result card to the service's Feishu chat."""
+    """推送诊断结果卡片到飞书群"""
     from agent.channels.feishu import send_card_to_chat
     from agent.templates import render_card
     from agent.tools.cmdb import get_service_chat_id
@@ -255,6 +332,13 @@ async def _notify_diagnosis(
         alert_name = alert.get("alertname", "未知")
         action_plan = _format_action_plan(runbook)
         risk_summary = risk_assessment or {}
+        logger.info(
+            "准备发送诊断卡片: incident=%s, service=%s, runbook=%s, risk=%s",
+            incident_id,
+            service,
+            runbook.get("name") if runbook else "-",
+            risk_summary.get("level", "未评估"),
+        )
 
         card = render_card(
             "diagnosis_card",
@@ -276,19 +360,23 @@ async def _notify_diagnosis(
         if chat_id:
             result = await send_card_to_chat(chat_id, card)
             logger.info(
-                f"诊断通知已发送: 群={chat_id}, "
-                f"工单={incident_id}, code={result.get('code')}"
+                "诊断通知已发送: chat_id=%s, incident=%s, code=%s",
+                chat_id,
+                incident_id,
+                result.get("code"),
             )
         else:
             logger.warning(
-                f"服务 '{service}' 未配置 chat_id，"
-                f"跳过诊断通知: 工单={incident_id}"
+                "服务未配置 chat_id，跳过诊断通知: service=%s, incident=%s",
+                service,
+                incident_id,
             )
     except Exception as e:
-        logger.error(f"诊断通知发送失败: 工单={incident_id}, 错误={e}")
+        logger.error("诊断通知发送失败: incident=%s, error=%s", incident_id, e)
 
 
 def _format_action_plan(runbook: dict | None) -> str:
+    """将结构化 Runbook 步骤格式化为飞书 Markdown"""
     if not runbook:
         return "未匹配到 Runbook，请人工确认处置方案。"
     lines = []
@@ -301,6 +389,7 @@ def _format_action_plan(runbook: dict | None) -> str:
 
 
 def _format_risk_warnings(risk_assessment: dict) -> str:
+    """优先展示警告，没有警告时展示风险因素"""
     warnings = risk_assessment.get("warnings") or []
     factors = risk_assessment.get("factors") or []
     lines = warnings or factors
