@@ -20,6 +20,15 @@ def parse_card_action(value) -> dict:
     return {}
 
 
+def extract_card_action_value(body: dict) -> dict:
+    """Extract action value from old and new Feishu card callback payloads."""
+    if body.get("type") == "card_action":
+        return body.get("action", {}).get("value", {})
+    if body.get("header", {}).get("event_type") == "card.action.trigger":
+        return body.get("event", {}).get("action", {}).get("value", {})
+    return {}
+
+
 @router.post("/approvals/callback")
 async def approval_callback(request: Request, background_tasks: BackgroundTasks):
     """Handle Feishu interactive card callbacks for manual approval."""
@@ -34,8 +43,7 @@ async def approval_callback(request: Request, background_tasks: BackgroundTasks)
         return {"status": "invalid_callback"}
 
     try:
-        value = body.get("action", {}).get("value", {})
-        action_value = parse_card_action(value)
+        action_value = parse_card_action(extract_card_action_value(body))
     except json.JSONDecodeError:
         logger.warning("审批回调按钮值不是合法 JSON: %s", body.get("action"))
         return {"status": "invalid_action"}

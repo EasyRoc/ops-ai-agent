@@ -84,7 +84,9 @@ async def verify_card_callback(headers: dict, body: dict) -> bool:
     """
     if body.get("challenge"):
         return True
-    return body.get("type") == "card_action"
+    if body.get("type") == "card_action":
+        return True
+    return body.get("header", {}).get("event_type") == "card.action.trigger"
 
 
 async def handle_card_action(action: str, incident_id: str) -> str:

@@ -59,6 +59,39 @@ class ApprovalCallbackTest(IsolatedAsyncioTestCase):
         self.assertEqual(response["approval_status"], "approved")
         update_status.assert_awaited_once_with("INC-PHASE2", "approved")
 
+    async def test_callback_accepts_new_feishu_card_action_event(self):
+        background_tasks = BackgroundTasks()
+
+        with (
+            patch("agent.api.v1.approvals._update_incident_status", new=AsyncMock()) as update_status,
+            patch("agent.api.v1.approvals._update_feishu_card", new=AsyncMock()),
+        ):
+            response = await approval_callback(
+                _JSONRequest(
+                    {
+                        "schema": "2.0",
+                        "header": {
+                            "event_type": "card.action.trigger",
+                        },
+                        "event": {
+                            "operator": {"open_id": "ou_test"},
+                            "action": {
+                                "value": {
+                                    "action": "approve",
+                                    "incident_id": "INC-NEW-CARD",
+                                },
+                            },
+                        },
+                    }
+                ),
+                background_tasks,
+            )
+            for task in background_tasks.tasks:
+                await task()
+
+        self.assertEqual(response["approval_status"], "approved")
+        update_status.assert_awaited_once_with("INC-NEW-CARD", "approved")
+
 
 class CardActionParserTest(TestCase):
     def test_parse_card_action_accepts_json_string_or_dict(self):
