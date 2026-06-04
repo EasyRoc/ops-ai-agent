@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from agent.channels.feishu import handle_card_action, verify_card_callback
 from agent.db.crud import AsyncSessionLocal, get_incident, get_session, update_incident
+from agent.workflows.alert_workflow import AlertState, build_execution_workflow
 
 logger = logging.getLogger("ops-agent.api.approvals")
 router = APIRouter(prefix="/api/v1")
@@ -152,12 +153,23 @@ async def approval_callback(request: Request, background_tasks: BackgroundTasks)
         return {"status": "missing_params"}
 
     approval_status = await handle_card_action(action, incident_id)
+    operator = extract_operator(body)
     background_tasks.add_task(_update_incident_status, incident_id, approval_status)
     background_tasks.add_task(_update_feishu_card, body, incident_id, approval_status)
+    background_tasks.add_task(
+        _write_approval_audit,
+        incident_id,
+        operator,
+        approval_status,
+        {"action": action, "callback_type": callback_type},
+    )
+    if approval_status == "approved":
+        background_tasks.add_task(run_execution_workflow, incident_id, body)
     logger.info(
-        "审批回调后台任务已入队: incident=%s, approval_status=%s",
+        "审批回调后台任务已入队: incident=%s, approval_status=%s, operator=%s",
         incident_id,
         approval_status,
+        operator,
     )
 
     return {
@@ -181,6 +193,115 @@ async def _update_incident_status(incident_id: str, approval_status: str) -> Non
             logger.info("审批状态已更新: incident=%s, status=%s", incident_id, approval_status)
         else:
             logger.warning("审批状态更新失败，工单不存在: incident=%s", incident_id)
+
+
+async def _write_approval_audit(incident_id: str, operator: str, approval_status: str, detail: dict) -> None:
+    """Record the Feishu approval decision into audit_logs."""
+    from agent.agents.audit import write_audit
+
+    logger.info(
+        "进入 _write_approval_audit: incident=%s, operator=%s, status=%s",
+        incident_id,
+        operator,
+        approval_status,
+    )
+    await write_audit(incident_id, operator, approval_status, detail)
+
+
+async def _load_execution_state(incident_id: str, operator: str) -> AlertState | None:
+    """从数据库恢复 Phase 3 工作流需要的最小状态。
+
+    审批回调是无状态 HTTP 请求，不能直接拿到 diagnose 阶段的内存 state。
+    所以这里从 incidents 表恢复 alert、diagnosis、runbook、risk 这些关键字段。
+    """
+    logger.info("进入 _load_execution_state: incident=%s, operator=%s", incident_id, operator)
+    async with AsyncSessionLocal() as session:
+        incident = await get_incident(session, incident_id)
+
+    if not incident:
+        logger.warning("恢复执行工作流状态失败，工单不存在: incident=%s", incident_id)
+        return None
+
+    state: AlertState = {
+        "alert_raw": {},
+        "incident_id": incident.id,
+        "alert_parsed": {
+            "alertname": incident.alert_name or "",
+            "service": incident.service,
+            "env": incident.env,
+            "severity": incident.severity,
+            "value": incident.alert_value or "",
+        },
+        "context": {
+            "service": incident.service,
+            "env": incident.env,
+        },
+        "diagnosis": {
+            "root_cause": incident.root_cause or "未记录根因",
+            "confidence": incident.confidence or 0,
+            "evidence": incident.evidence or [],
+        },
+        "runbook": {
+            "name": incident.runbook_name,
+            "steps": incident.action_plan or [],
+        },
+        "risk_assessment": incident.risk_assessment or {},
+        "approval_status": incident.approval_status,
+        "execution_result": None,
+        "verification_result": None,
+        "report": None,
+        "operator": operator,
+        "error": None,
+    }
+    logger.info(
+        "执行工作流状态已恢复: incident=%s, service=%s, runbook=%s, steps=%s, risk_allowed=%s",
+        incident.id,
+        incident.service,
+        incident.runbook_name,
+        len(incident.action_plan or []),
+        (incident.risk_assessment or {}).get("allowed"),
+    )
+    return state
+
+
+async def run_execution_workflow(incident_id: str, body: dict | None = None) -> dict:
+    """审批通过后启动 Phase 3: execute → verify → report。"""
+    operator = extract_operator(body or {})
+    logger.info(
+        "进入 run_execution_workflow: incident=%s, operator=%s",
+        incident_id,
+        operator,
+    )
+    state = await _load_execution_state(incident_id, operator)
+    if not state:
+        return {"status": "not_found", "incident_id": incident_id}
+
+    workflow = build_execution_workflow()
+    try:
+        result = await workflow.ainvoke(state)
+        logger.info(
+            "Phase 3 执行工作流完成: incident=%s, execution=%s, verification=%s, has_report=%s",
+            incident_id,
+            (result.get("execution_result") or {}).get("status"),
+            (result.get("verification_result") or {}).get("status"),
+            bool(result.get("report")),
+        )
+        return result
+    except Exception as exc:
+        logger.error(
+            "Phase 3 执行工作流失败: incident=%s, error=%s",
+            incident_id,
+            exc,
+            exc_info=True,
+        )
+        async with AsyncSessionLocal() as session:
+            await update_incident(
+                session,
+                incident_id,
+                status="escalated",
+                approval_status="escalated",
+            )
+        return {"status": "failed", "incident_id": incident_id, "error": str(exc)}
 
 
 async def _update_feishu_card(body: dict, incident_id: str, approval_status: str) -> None:

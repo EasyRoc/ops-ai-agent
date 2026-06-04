@@ -1,6 +1,6 @@
 # agent/tools/loki.py
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import httpx
 
 from agent.config import settings
@@ -15,14 +15,16 @@ async def query_service_logs(service: str, keyword: str = "ERROR", minutes: int 
     query = f'{{app="{service}"}} |= "{keyword}"'
     logger.info(f"Loki 日志查询: 服务={service}, 关键词={keyword}, 时间窗口={minutes}分钟")
 
+    now = datetime.now(timezone.utc)
+
     async with httpx.AsyncClient(trust_env=False) as client:
         resp = await client.get(
             f"{LOKI_API}/query_range",
             params={
                 "query": query,
                 "limit": 50,
-                "start": int((datetime.utcnow() - timedelta(minutes=minutes)).timestamp() * 1e9),
-                "end": int(datetime.utcnow().timestamp() * 1e9),
+                "start": int((now - timedelta(minutes=minutes)).timestamp() * 1e9),
+                "end": int(now.timestamp() * 1e9),
             },
         )
         data = resp.json()

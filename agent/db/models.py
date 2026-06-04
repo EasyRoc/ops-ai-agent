@@ -37,7 +37,7 @@ class Execution(Base):
 
     id = Column(Integer, primary_key=True)
     incident_id = Column(String(64), ForeignKey("incidents.id"))
-    action = Column(String(128), nullable=False)
+    action = Column(String(512), nullable=False)
     operator = Column(String(64))
     status = Column(String(32), nullable=False, default="pending")
     result = Column(JSONB)
@@ -51,6 +51,7 @@ class Report(Base):
     id = Column(Integer, primary_key=True)
     incident_id = Column(String(64), ForeignKey("incidents.id"))
     content = Column(Text, nullable=False)
+    fault_patterns = Column(JSONB)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 

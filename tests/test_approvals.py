@@ -41,6 +41,8 @@ class ApprovalCallbackTest(IsolatedAsyncioTestCase):
         with (
             patch("agent.api.v1.approvals._update_incident_status", new=AsyncMock()) as update_status,
             patch("agent.api.v1.approvals._update_feishu_card", new=AsyncMock()),
+            patch("agent.api.v1.approvals._write_approval_audit", new=AsyncMock()),
+            patch("agent.api.v1.approvals.run_execution_workflow", new=AsyncMock()) as run_workflow,
         ):
             response = await approval_callback(
                 _JSONRequest(
@@ -58,6 +60,7 @@ class ApprovalCallbackTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(response["approval_status"], "approved")
         update_status.assert_awaited_once_with("INC-PHASE2", "approved")
+        run_workflow.assert_awaited_once()
 
     async def test_callback_accepts_new_feishu_card_action_event(self):
         background_tasks = BackgroundTasks()
@@ -65,6 +68,8 @@ class ApprovalCallbackTest(IsolatedAsyncioTestCase):
         with (
             patch("agent.api.v1.approvals._update_incident_status", new=AsyncMock()) as update_status,
             patch("agent.api.v1.approvals._update_feishu_card", new=AsyncMock()),
+            patch("agent.api.v1.approvals._write_approval_audit", new=AsyncMock()),
+            patch("agent.api.v1.approvals.run_execution_workflow", new=AsyncMock()) as run_workflow,
         ):
             response = await approval_callback(
                 _JSONRequest(
@@ -91,6 +96,7 @@ class ApprovalCallbackTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(response["approval_status"], "approved")
         update_status.assert_awaited_once_with("INC-NEW-CARD", "approved")
+        run_workflow.assert_awaited_once()
 
     async def test_update_feishu_card_replaces_buttons_with_approval_result(self):
         with patch("agent.channels.feishu.update_card", new=AsyncMock(return_value={"code": 0})) as update_card:

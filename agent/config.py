@@ -1,8 +1,10 @@
 # agent/config.py
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
     # Agent
     agent_host: str = "0.0.0.0"
     agent_port: int = 8000
@@ -58,10 +60,6 @@ class Settings(BaseSettings):
 
     # Alertmanager dedup window (seconds)
     alert_dedup_window: int = 300
-
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
 
 
 settings = Settings()
