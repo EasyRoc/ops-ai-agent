@@ -27,7 +27,7 @@ CREATE INDEX IF NOT EXISTS idx_incidents_created ON incidents(created_at DESC);
 CREATE TABLE IF NOT EXISTS executions (
     id              SERIAL PRIMARY KEY,
     incident_id     VARCHAR(64) REFERENCES incidents(id),
-    action          VARCHAR(128) NOT NULL,
+    action          VARCHAR(512) NOT NULL,
     operator        VARCHAR(64),
     status          VARCHAR(32) NOT NULL DEFAULT 'pending',
     result          JSONB,
@@ -41,8 +41,11 @@ CREATE TABLE IF NOT EXISTS reports (
     id              SERIAL PRIMARY KEY,
     incident_id     VARCHAR(64) REFERENCES incidents(id),
     content         TEXT NOT NULL,
+    fault_patterns  JSONB,
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_reports_incident ON reports(incident_id);
 
 CREATE TABLE IF NOT EXISTS audit_logs (
     id              SERIAL PRIMARY KEY,

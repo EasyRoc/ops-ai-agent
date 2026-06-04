@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>执行记录 - Ops AI Agent</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f7f8fb; color: #202733; }
+    header { padding: 28px 36px 18px; background: #111827; color: white; }
+    header p { margin: 8px 0 0; color: #cbd5e1; }
+    main { padding: 28px 36px; }
+    a { color: #2563eb; text-decoration: none; font-weight: 700; }
+    header a { color: white; }
+    button { border: 0; border-radius: 8px; padding: 10px 14px; background: #2563eb; color: white; cursor: pointer; font-weight: 700; }
+    .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 18px; }
+    .card { background: white; border: 1px solid #e5e7eb; border-radius: 14px; box-shadow: 0 8px 22px rgba(15,23,42,.05); overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 14px 16px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: top; }
+    th { color: #667085; background: #f9fafb; }
+    pre { white-space: pre-wrap; background: #0f172a; color: #e2e8f0; padding: 10px; border-radius: 10px; max-width: 520px; overflow: auto; }
+    .badge { display: inline-block; padding: 4px 8px; border-radius: 999px; background: #e0e7ff; color: #3730a3; font-size: 12px; font-weight: 700; }
+    .success { background: #d1fae5; color: #065f46; }
+    .failed, .timeout, .blocked { background: #fee2e2; color: #991b1b; }
+    .muted { color: #667085; }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/">← 返回事件列表</a>
+    <h1>自动执行记录</h1>
+    <p>查看 Phase 3 实际执行过的白名单命令、操作人和 kubectl 返回结果。</p>
+  </header>
+  <main>
+    <div class="toolbar">
+      <button onclick="loadExecutions()">刷新执行记录</button>
+      <span id="summary" class="muted">正在加载...</span>
+    </div>
+    <section class="card">
+      <table>
+        <thead>
+          <tr>
+            <th>Incident</th>
+            <th>状态</th>
+            <th>操作人</th>
+            <th>命令</th>
+            <th>结果</th>
+            <th>时间</th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </section>
+  </main>
+  <script>
+    async function loadExecutions() {
+      const rows = document.getElementById("rows");
+      const summary = document.getElementById("summary");
+      rows.innerHTML = "";
+      summary.textContent = "正在加载...";
+      try {
+        const response = await fetch("/api/v1/executions?limit=100");
+        if (!response.ok) throw new Error(`接口返回 ${response.status}`);
+        const data = await response.json();
+        summary.textContent = `共 ${data.total || 0} 条执行记录`;
+        rows.innerHTML = (data.executions || []).map((item) => `
+          <tr>
+            <td><a href="/incident-detail.html?id=${encodeURIComponent(item.incident_id)}">${item.incident_id}</a></td>
+            <td><span class="badge ${item.status || ""}">${item.status || "-"}</span></td>
+            <td>${item.operator || "-"}</td>
+            <td><pre>${item.action || "-"}</pre></td>
+            <td><pre>${JSON.stringify(item.result || {}, null, 2)}</pre></td>
+            <td>${item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</td>
+          </tr>
+        `).join("") || "<tr><td colspan='6' class='muted'>暂无执行记录。</td></tr>";
+      } catch (err) {
+        summary.textContent = `加载失败：${err.message}`;
+      }
+    }
+    loadExecutions();
+  </script>
+</body>
+</html>

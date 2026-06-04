@@ -1,8 +1,8 @@
-<svg width="1200" height="560" viewBox="0 0 1200 560" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">Ops AI Agent 系统架构</title>
-  <desc id="desc">展示 Demo 服务、可观测栈、Agent、数据库、Runbook 和飞书之间的关系。</desc>
+<svg width="1200" height="640" viewBox="0 0 1200 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Ops AI Agent Phase 3 系统架构</title>
+  <desc id="desc">展示 Demo 服务、可观测栈、Agent Phase 3 模块、数据库、Runbook、Web Console 和飞书之间的关系。</desc>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="560" gradientUnits="userSpaceOnUse">
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="640" gradientUnits="userSpaceOnUse">
       <stop stop-color="#F8FAFC"/>
       <stop offset="1" stop-color="#EFF6FF"/>
     </linearGradient>
@@ -12,6 +12,9 @@
     <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
       <path d="M2 2L10 6L2 10" stroke="#2563EB" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
+    <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2L10 6L2 10" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
     <style>
       .title { font: 700 30px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0F172A; }
       .subtitle { font: 400 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748B; }
@@ -20,70 +23,98 @@
       .box-green { fill: #ECFDF5; stroke: #86EFAC; }
       .box-orange { fill: #FFF7ED; stroke: #FDBA74; }
       .box-purple { fill: #F5F3FF; stroke: #C4B5FD; }
+      .box-red { fill: #FEF2F2; stroke: #FCA5A5; }
       .label { font: 700 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1E293B; }
       .small { font: 400 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748B; }
+      .tiny { font: 400 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748B; }
       .pill { fill: #DBEAFE; }
+      .pill-green { fill: #D1FAE5; }
+      .pill-purple { fill: #EDE9FE; }
       .pill-text { font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1D4ED8; }
-      .arrow { stroke: #2563EB; stroke-width: 2.2; marker-end: url(#arrow); }
+      .pill-text-green { font: 700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #047857; }
+      .arrow { stroke: #2563EB; stroke-width: 2.2; marker-end: url(#arrow); fill: none; }
+      .arrow-green { stroke: #059669; stroke-width: 2.2; marker-end: url(#arrowGreen); fill: none; }
       .dash { stroke-dasharray: 7 6; }
     </style>
   </defs>
 
-  <rect width="1200" height="560" rx="28" fill="url(#bg)"/>
-  <text x="48" y="58" class="title">Ops AI Agent 系统架构</text>
-  <text x="48" y="86" class="subtitle">从监控告警到根因诊断、Runbook 方案、风险评估和人工审批的本地演示环境</text>
+  <rect width="1200" height="640" rx="28" fill="url(#bg)"/>
+  <text x="48" y="58" class="title">Ops AI Agent Phase 3 系统架构</text>
+  <text x="48" y="86" class="subtitle">从监控告警到根因诊断、人工审批、白名单自动执行、恢复验证和报告沉淀</text>
 
-  <rect x="56" y="138" width="190" height="250" rx="18" class="box box-green"/>
-  <text x="84" y="176" class="label">Demo 服务</text>
-  <text x="84" y="210" class="small">frontend-service</text>
-  <text x="84" y="236" class="small">order-service</text>
-  <text x="84" y="262" class="small">payment-service</text>
-  <text x="84" y="288" class="small">inventory-service</text>
-  <rect x="84" y="318" width="126" height="30" rx="15" class="pill"/>
-  <text x="101" y="338" class="pill-text">Micrometer</text>
+  <rect x="54" y="138" width="190" height="260" rx="18" class="box box-green"/>
+  <text x="82" y="176" class="label">Demo 服务</text>
+  <text x="82" y="210" class="small">frontend-service</text>
+  <text x="82" y="236" class="small">order-service</text>
+  <text x="82" y="262" class="small">payment-service</text>
+  <text x="82" y="288" class="small">inventory-service</text>
+  <rect x="82" y="320" width="126" height="30" rx="15" class="pill-green"/>
+  <text x="99" y="340" class="pill-text-green">Micrometer</text>
+  <text x="82" y="374" class="tiny">接收 kubectl 白名单变更</text>
 
-  <rect x="316" y="120" width="220" height="286" rx="18" class="box box-blue"/>
-  <text x="348" y="158" class="label">可观测栈</text>
-  <text x="348" y="196" class="small">Prometheus：指标与告警规则</text>
-  <text x="348" y="224" class="small">Alertmanager：告警路由</text>
-  <text x="348" y="252" class="small">Grafana：业务与 K8S 看板</text>
-  <text x="348" y="280" class="small">Loki / Promtail：日志查询</text>
+  <rect x="296" y="118" width="230" height="296" rx="18" class="box box-blue"/>
+  <text x="328" y="156" class="label">可观测栈</text>
+  <text x="328" y="194" class="small">Prometheus：指标与告警规则</text>
+  <text x="328" y="222" class="small">Alertmanager：告警路由</text>
+  <text x="328" y="250" class="small">Grafana：业务与 K8S 看板</text>
+  <text x="328" y="278" class="small">Loki / Promtail：日志查询</text>
+  <rect x="328" y="318" width="142" height="30" rx="15" class="pill"/>
+  <text x="350" y="338" class="pill-text">恢复验证数据源</text>
 
-  <rect x="602" y="100" width="260" height="326" rx="20" class="box box-purple"/>
-  <text x="638" y="140" class="label">FastAPI Agent</text>
-  <text x="638" y="180" class="small">Webhook：/api/v1/alerts</text>
-  <text x="638" y="208" class="small">LangGraph：诊断工作流</text>
-  <text x="638" y="236" class="small">RCA：DeepSeek + 规则兜底</text>
-  <text x="638" y="264" class="small">Runbook：方案匹配</text>
-  <text x="638" y="292" class="small">Risk：风险评估</text>
-  <text x="638" y="320" class="small">Approval：飞书审批回调</text>
-  <rect x="638" y="348" width="154" height="30" rx="15" class="pill"/>
-  <text x="658" y="368" class="pill-text">Web Console</text>
+  <rect x="582" y="102" width="292" height="418" rx="22" class="box box-purple"/>
+  <text x="618" y="142" class="label">FastAPI Agent</text>
+  <text x="618" y="176" class="small">Webhook：/api/v1/alerts</text>
+  <text x="618" y="204" class="small">LangGraph：诊断 + 执行工作流</text>
+  <text x="618" y="232" class="small">RCA：DeepSeek + 规则兜底</text>
+  <text x="618" y="260" class="small">Runbook：方案匹配</text>
+  <text x="618" y="288" class="small">Risk：风险评估</text>
+  <text x="618" y="316" class="small">Approval：飞书审批回调</text>
 
-  <rect x="932" y="116" width="210" height="120" rx="18" class="box"/>
-  <text x="964" y="154" class="label">PostgreSQL</text>
-  <text x="964" y="188" class="small">Incident</text>
-  <text x="964" y="214" class="small">诊断、方案、审批状态</text>
+  <rect x="618" y="346" width="102" height="32" rx="16" class="pill-purple"/>
+  <text x="640" y="367" class="pill-text">Executor</text>
+  <rect x="734" y="346" width="86" height="32" rx="16" class="pill-purple"/>
+  <text x="755" y="367" class="pill-text">Verify</text>
+  <rect x="618" y="392" width="86" height="32" rx="16" class="pill-purple"/>
+  <text x="639" y="413" class="pill-text">Report</text>
+  <rect x="718" y="392" width="82" height="32" rx="16" class="pill-purple"/>
+  <text x="740" y="413" class="pill-text">Audit</text>
+  <text x="618" y="462" class="tiny">自动执行只在审批通过后触发</text>
+  <text x="618" y="486" class="tiny">只执行白名单内第一个变更动作</text>
 
-  <rect x="932" y="276" width="210" height="120" rx="18" class="box box-orange"/>
-  <text x="964" y="314" class="label">飞书群</text>
-  <text x="964" y="348" class="small">告警卡片</text>
-  <text x="964" y="374" class="small">诊断卡片 + 审批按钮</text>
+  <rect x="930" y="92" width="214" height="168" rx="18" class="box"/>
+  <text x="962" y="130" class="label">PostgreSQL</text>
+  <text x="962" y="164" class="small">incidents</text>
+  <text x="962" y="190" class="small">executions</text>
+  <text x="962" y="216" class="small">reports</text>
+  <text x="962" y="242" class="small">audit_logs</text>
 
-  <rect x="604" y="462" width="256" height="58" rx="18" class="box"/>
-  <text x="638" y="496" class="label">Runbooks</text>
-  <text x="742" y="496" class="small">CPU / OOM / Error / Latency</text>
+  <rect x="930" y="300" width="214" height="122" rx="18" class="box box-orange"/>
+  <text x="962" y="338" class="label">飞书群</text>
+  <text x="962" y="372" class="small">诊断卡片 + 审批按钮</text>
+  <text x="962" y="398" class="small">批准 / 拒绝 / 转人工</text>
 
-  <path d="M246 218C270 218 288 218 316 218" class="arrow"/>
-  <path d="M536 224C560 224 574 224 602 224" class="arrow"/>
-  <path d="M862 182C888 182 904 182 932 182" class="arrow"/>
-  <path d="M862 336C890 336 904 336 932 336" class="arrow"/>
-  <path d="M732 426V462" class="arrow"/>
-  <path d="M604 330C560 330 556 320 536 292" class="arrow dash"/>
-  <path d="M602 270C566 270 556 270 536 270" class="arrow dash"/>
+  <rect x="930" y="462" width="214" height="88" rx="18" class="box box-green"/>
+  <text x="962" y="500" class="label">Web Console</text>
+  <text x="962" y="528" class="small">Incident / 执行记录 / 报告</text>
 
-  <text x="256" y="205" class="small">指标 / 日志</text>
-  <text x="544" y="210" class="small">告警</text>
-  <text x="878" y="168" class="small">落库</text>
-  <text x="878" y="322" class="small">通知 / 回调</text>
+  <rect x="580" y="560" width="294" height="54" rx="18" class="box"/>
+  <text x="616" y="594" class="label">Runbooks</text>
+  <text x="730" y="594" class="small">CPU / OOM / Error / Latency</text>
+
+  <path d="M244 220C264 220 274 220 296 220" class="arrow"/>
+  <path d="M526 224C550 224 558 224 582 224" class="arrow"/>
+  <path d="M874 164C900 164 904 164 930 164" class="arrow"/>
+  <path d="M874 360C900 360 904 360 930 360" class="arrow"/>
+  <path d="M1037 422V462" class="arrow-green"/>
+  <path d="M728 520V560" class="arrow"/>
+  <path d="M582 352C520 352 510 318 526 318" class="arrow dash"/>
+  <path d="M618 362C500 470 274 430 190 398" class="arrow-green"/>
+  <path d="M734 362C596 476 504 390 470 348" class="arrow dash"/>
+
+  <text x="254" y="207" class="small">指标 / 日志</text>
+  <text x="534" y="210" class="small">告警 Webhook</text>
+  <text x="886" y="150" class="small">落库</text>
+  <text x="886" y="346" class="small">通知 / 回调</text>
+  <text x="398" y="462" class="small">kubectl 变更</text>
+  <text x="470" y="334" class="small">指标验证</text>
 </svg>

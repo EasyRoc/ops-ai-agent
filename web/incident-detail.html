@@ -43,6 +43,8 @@
     .pending_approval { background: #fef3c7; color: #92400e; }
     .approved { background: #d1fae5; color: #065f46; }
     .rejected { background: #fee2e2; color: #991b1b; }
+    .success, .resolved, .verified { background: #d1fae5; color: #065f46; }
+    .failed, .timeout, .blocked { background: #fee2e2; color: #991b1b; }
     pre {
       white-space: pre-wrap;
       background: #0f172a;
@@ -103,6 +105,19 @@
       <h3>Runbook 处置方案</h3>
       <p id="runbookName" class="muted"></p>
       <ol id="actionPlan"></ol>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h3>自动执行记录</h3>
+        <p class="muted">审批通过后，Phase 3 会把真正执行过的白名单命令写到这里。</p>
+        <div id="executionList">正在加载...</div>
+      </div>
+      <div class="card">
+        <h3>故障报告</h3>
+        <p class="muted">恢复验证通过后自动生成 Markdown 报告，便于复盘和沉淀历史故障。</p>
+        <div id="reportPreview">正在加载...</div>
+      </div>
     </section>
   </main>
   <script>
@@ -165,6 +180,47 @@
       `).join("") || "<li>暂无处置方案</li>";
     }
 
+    async function loadExecutions() {
+      const container = document.getElementById("executionList");
+      if (!incidentId) return;
+      try {
+        const response = await fetch(`/api/v1/incidents/${encodeURIComponent(incidentId)}/executions`);
+        if (!response.ok) throw new Error(`接口返回 ${response.status}`);
+        const data = await response.json();
+        if (!data.executions || data.executions.length === 0) {
+          container.innerHTML = "<p class='muted'>暂无执行记录。</p>";
+          return;
+        }
+        container.innerHTML = data.executions.map((item) => `
+          <p><span class="badge ${item.status || ""}">${statusText(item.status)}</span> ${item.created_at ? new Date(item.created_at).toLocaleString() : ""}</p>
+          <pre>${item.action || "-"}</pre>
+          <pre>${JSON.stringify(item.result || {}, null, 2)}</pre>
+        `).join("");
+      } catch (err) {
+        container.innerHTML = `<p class="muted">执行记录加载失败：${err.message}</p>`;
+      }
+    }
+
+    async function loadReport() {
+      const container = document.getElementById("reportPreview");
+      if (!incidentId) return;
+      try {
+        const response = await fetch(`/api/v1/reports/${encodeURIComponent(incidentId)}`);
+        if (response.status === 404) {
+          container.innerHTML = "<p class='muted'>暂无故障报告。</p>";
+          return;
+        }
+        if (!response.ok) throw new Error(`接口返回 ${response.status}`);
+        const data = await response.json();
+        container.innerHTML = `
+          <p><a href="/api/v1/reports/${encodeURIComponent(incidentId)}?format=markdown" target="_blank">打开 Markdown 报告</a></p>
+          <pre>${(data.content || "").slice(0, 1200)}</pre>
+        `;
+      } catch (err) {
+        container.innerHTML = `<p class="muted">故障报告加载失败：${err.message}</p>`;
+      }
+    }
+
     async function submitApproval(action) {
       if (!incidentId) return;
       const response = await fetch("/api/v1/approvals/callback", {
@@ -185,6 +241,8 @@
     }
 
     loadIncident();
+    loadExecutions();
+    loadReport();
   </script>
 </body>
 </html>

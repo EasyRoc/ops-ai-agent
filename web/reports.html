@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>故障报告 - Ops AI Agent</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f7f8fb; color: #202733; }
+    header { padding: 28px 36px 18px; background: #111827; color: white; }
+    header p { margin: 8px 0 0; color: #cbd5e1; }
+    main { padding: 28px 36px; max-width: 1160px; }
+    a { color: #2563eb; text-decoration: none; font-weight: 700; }
+    header a { color: white; }
+    button { border: 0; border-radius: 8px; padding: 10px 14px; background: #2563eb; color: white; cursor: pointer; font-weight: 700; }
+    .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 18px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+    .card { background: white; border: 1px solid #e5e7eb; border-radius: 14px; padding: 18px; box-shadow: 0 8px 22px rgba(15,23,42,.05); }
+    pre { white-space: pre-wrap; background: #0f172a; color: #e2e8f0; padding: 12px; border-radius: 10px; max-height: 420px; overflow: auto; }
+    .muted { color: #667085; }
+  </style>
+</head>
+<body>
+  <header>
+    <a href="/">← 返回事件列表</a>
+    <h1>故障报告</h1>
+    <p>查看自动执行和验证完成后沉淀的 Markdown 复盘报告。</p>
+  </header>
+  <main>
+    <div class="toolbar">
+      <button onclick="loadReports()">刷新报告</button>
+      <span id="summary" class="muted">正在加载...</span>
+    </div>
+    <section id="reports" class="grid"></section>
+  </main>
+  <script>
+    async function loadReports() {
+      const container = document.getElementById("reports");
+      const summary = document.getElementById("summary");
+      container.innerHTML = "";
+      summary.textContent = "正在加载...";
+      try {
+        const response = await fetch("/api/v1/reports?limit=50");
+        if (!response.ok) throw new Error(`接口返回 ${response.status}`);
+        const data = await response.json();
+        summary.textContent = `共 ${data.total || 0} 份报告`;
+        container.innerHTML = (data.reports || []).map((item) => `
+          <article class="card">
+            <h3>${item.incident_id || "-"}</h3>
+            <p class="muted">${item.created_at ? new Date(item.created_at).toLocaleString() : "-"}</p>
+            <p>
+              <a href="/incident-detail.html?id=${encodeURIComponent(item.incident_id)}">查看事件</a>
+              ·
+              <a href="/api/v1/reports/${encodeURIComponent(item.incident_id)}?format=markdown" target="_blank">打开 Markdown</a>
+            </p>
+            <pre>${(item.content || "").slice(0, 1500)}</pre>
+          </article>
+        `).join("") || "<p class='muted'>暂无故障报告。</p>";
+      } catch (err) {
+        summary.textContent = `加载失败：${err.message}`;
+      }
+    }
+    loadReports();
+  </script>
+</body>
+</html>

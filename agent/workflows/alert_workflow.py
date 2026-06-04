@@ -14,6 +14,10 @@ class AlertState(TypedDict):
     runbook: Optional[dict]     # Phase 2: 匹配到的 Runbook 和结构化处置步骤
     risk_assessment: Optional[dict]  # Phase 2: 处置方案风险评估
     approval_status: Optional[str]   # Phase 2: pending / approved / rejected / escalated
+    execution_result: Optional[dict]  # Phase 3: 自动执行结果
+    verification_result: Optional[dict]  # Phase 3: 执行后的恢复验证结果
+    report: Optional[dict]  # Phase 3: 故障报告生成结果
+    operator: Optional[str]  # Phase 3: 审批/执行操作人
     error: Optional[str]        # 任意节点异常时写入，触发工作流提前终止
 
 
@@ -65,6 +69,66 @@ async def diagnose(state: AlertState) -> AlertState:
     return result
 
 
+async def execute(state: AlertState) -> AlertState:
+    """Node: execute approved runbook action."""
+    from agent.agents.executor import execute as execute_node
+
+    logger.info("[自动执行] 进入执行节点: incident=%s", state.get("incident_id", "-"))
+    result = await execute_node(state)
+    execution_result = result.get("execution_result") or {}
+    logger.info(
+        "[自动执行] 执行节点完成: incident=%s, status=%s, executed=%s",
+        result.get("incident_id", "-"),
+        execution_result.get("status", "-"),
+        execution_result.get("executed", 0),
+    )
+    return result
+
+
+async def verify(state: AlertState) -> AlertState:
+    """Node: verify recovery after execution."""
+    from agent.agents.verify import verify as verify_node
+
+    logger.info("[恢复验证] 进入验证节点: incident=%s", state.get("incident_id", "-"))
+    result = await verify_node(state)
+    verification_result = result.get("verification_result") or {}
+    logger.info(
+        "[恢复验证] 验证节点完成: incident=%s, recovered=%s, status=%s",
+        result.get("incident_id", "-"),
+        verification_result.get("recovered"),
+        verification_result.get("status", "-"),
+    )
+    return result
+
+
+async def report(state: AlertState) -> AlertState:
+    """Node: generate incident report."""
+    from agent.agents.report import report as report_node
+
+    logger.info("[报告沉淀] 进入报告节点: incident=%s", state.get("incident_id", "-"))
+    result = await report_node(state)
+    logger.info(
+        "[报告沉淀] 报告节点完成: incident=%s, has_report=%s",
+        result.get("incident_id", "-"),
+        bool(result.get("report")),
+    )
+    return result
+
+
+async def escalate(state: AlertState) -> AlertState:
+    """Node: stop automation and keep the incident in manual escalation."""
+    incident_id = state.get("incident_id") or "-"
+    reason = (
+        state.get("error")
+        or (state.get("execution_result") or {}).get("reason")
+        or (state.get("verification_result") or {}).get("reason")
+        or "自动执行链路未满足继续条件"
+    )
+    state["approval_status"] = "escalated"
+    logger.warning("[人工升级] incident=%s, reason=%s", incident_id, reason)
+    return state
+
+
 def should_continue(state: AlertState) -> str:
     """Route to the next node based on which state fields have been filled."""
     incident_id = state.get("incident_id", "?")
@@ -82,6 +146,39 @@ def should_continue(state: AlertState) -> str:
         return "collect_context"
     logger.info("[路由] 开始处理，路由到解析告警")
     return "parse_alert"
+
+
+def route_after_execute(state: AlertState) -> str:
+    """执行成功才进入验证，否则升级人工。"""
+    incident_id = state.get("incident_id", "-")
+    if state.get("error"):
+        logger.warning("[路由] 执行后发现错误，升级人工: incident=%s", incident_id)
+        return "escalate"
+    execution_result = state.get("execution_result") or {}
+    if execution_result.get("status") == "success":
+        logger.info("[路由] 执行成功，进入恢复验证: incident=%s", incident_id)
+        return "verify"
+    logger.warning(
+        "[路由] 执行未成功，升级人工: incident=%s, status=%s",
+        incident_id,
+        execution_result.get("status", "-"),
+    )
+    return "escalate"
+
+
+def route_after_verify(state: AlertState) -> str:
+    """恢复验证通过才生成报告，否则升级人工。"""
+    incident_id = state.get("incident_id", "-")
+    verification_result = state.get("verification_result") or {}
+    if verification_result.get("recovered"):
+        logger.info("[路由] 恢复验证通过，进入报告生成: incident=%s", incident_id)
+        return "generate_report"
+    logger.warning(
+        "[路由] 恢复验证未通过，升级人工: incident=%s, status=%s",
+        incident_id,
+        verification_result.get("status", "-"),
+    )
+    return "escalate"
 
 
 def build_alert_workflow() -> StateGraph:
@@ -106,4 +203,39 @@ def build_alert_workflow() -> StateGraph:
 
     compiled = workflow.compile()
     logger.info("告警工作流图编译完成")
+    return compiled
+
+
+def build_execution_workflow() -> StateGraph:
+    """Compile the Phase 3 workflow triggered after manual approval."""
+    logger.info("构建 Phase 3 执行工作流图")
+    workflow = StateGraph(AlertState)
+
+    workflow.add_node("execute", execute)
+    workflow.add_node("verify", verify)
+    workflow.add_node("generate_report", report)
+    workflow.add_node("escalate", escalate)
+
+    workflow.set_entry_point("execute")
+    workflow.add_conditional_edges(
+        "execute",
+        route_after_execute,
+        {
+            "verify": "verify",
+            "escalate": "escalate",
+        },
+    )
+    workflow.add_conditional_edges(
+        "verify",
+        route_after_verify,
+        {
+            "generate_report": "generate_report",
+            "escalate": "escalate",
+        },
+    )
+    workflow.add_edge("generate_report", END)
+    workflow.add_edge("escalate", END)
+
+    compiled = workflow.compile()
+    logger.info("Phase 3 执行工作流图编译完成")
     return compiled

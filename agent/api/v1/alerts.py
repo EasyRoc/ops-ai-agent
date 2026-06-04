@@ -50,6 +50,10 @@ async def run_diagnosis(alert_data: dict):
         "runbook": None,
         "risk_assessment": None,
         "approval_status": None,
+        "execution_result": None,
+        "verification_result": None,
+        "report": None,
+        "operator": None,
         "error": None,
     }
     try:

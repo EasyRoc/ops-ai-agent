@@ -33,6 +33,7 @@
       display: flex;
       gap: 12px;
       align-items: center;
+      flex-wrap: wrap;
       margin-bottom: 18px;
     }
     button {
@@ -65,6 +66,17 @@
     th { color: var(--muted); background: #f9fafb; font-weight: 700; }
     tr:hover td { background: #f8fafc; }
     a { color: var(--primary); text-decoration: none; font-weight: 600; }
+    .nav {
+      display: flex;
+      gap: 12px;
+      margin-top: 16px;
+    }
+    .nav a {
+      color: white;
+      border: 1px solid rgba(255,255,255,0.25);
+      border-radius: 999px;
+      padding: 7px 12px;
+    }
     .badge {
       display: inline-block;
       padding: 4px 8px;
@@ -86,7 +98,12 @@
 <body>
   <header>
     <h1>Ops AI Agent 控制台</h1>
-    <p>查看告警事件、Runbook 处置方案、风险评估和人工审批状态。</p>
+    <p>查看告警事件、Runbook 处置方案、风险评估、自动执行和故障报告。</p>
+    <nav class="nav">
+      <a href="/">事件列表</a>
+      <a href="/executions.html">执行记录</a>
+      <a href="/reports.html">故障报告</a>
+    </nav>
   </header>
   <main>
     <div class="toolbar">
