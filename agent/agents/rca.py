@@ -22,7 +22,7 @@ RCA_SYSTEM_PROMPT = """你是一个 SRE 根因分析专家。根据告警信息�
 
 
 def _build_diagnosis_prompt(context: dict, alert: dict) -> str:
-    """Build the RCA prompt from collected observability context."""
+    """根据采集的可观测性上下文构建根因分析提示词"""
     metrics = context.get("metrics", {})
     logs = context.get("logs", [])
     pods = context.get("pods", {})
@@ -77,9 +77,9 @@ def _build_diagnosis_prompt(context: dict, alert: dict) -> str:
 
 
 async def analyze_root_cause(state: AlertState) -> AlertState:
-    """Run RCA, attach action plan, persist the result, and notify Feishu.
+    """执行根因分析，生成处置方案，持久化结果并通知飞书
 
-    这是 diagnose 节点的主入口。它刻意分成四段：
+    这是 diagnose 节点的主入口，分四步：
     1. LLM / 规则兜底生成根因；
     2. Runbook + Risk 生成处置建议；
     3. 保存 Incident；
@@ -166,7 +166,7 @@ async def analyze_root_cause(state: AlertState) -> AlertState:
 
 
 def _build_action_plan(context: dict, alert: dict) -> tuple[dict | None, dict | None]:
-    """Build a structured Runbook action plan and its risk assessment."""
+    """构建结构化的 Runbook 处置方案及其风险评估"""
     from agent.agents.risk import evaluate_risk
     from agent.agents.runbook import load_runbook, render_runbook
 
@@ -210,7 +210,7 @@ def _build_action_plan(context: dict, alert: dict) -> tuple[dict | None, dict | 
 
 
 async def _diagnose_with_llm(context: dict, alert: dict) -> dict:
-    """Call the LLM and normalize its JSON response into the diagnosis schema."""
+    """调用 LLM 并将 JSON 响应归一化为诊断结构"""
     from agent.llm.client import chat_json
 
     prompt = _build_diagnosis_prompt(context, alert)
@@ -231,7 +231,7 @@ async def _diagnose_with_llm(context: dict, alert: dict) -> dict:
 
 
 def _diagnose_fallback(context: dict, alert: dict) -> dict:
-    """Rule-based RCA used when the LLM call fails or is not configured."""
+    """LLM 不可用时使用的规则兜底诊断"""
     metrics = context.get("metrics", {})
     pods = context.get("pods", {})
 
@@ -281,7 +281,7 @@ async def _save_diagnosis(
     risk_assessment: dict | None = None,
     approval_status: str | None = None,
 ):
-    """Persist diagnosis and Phase 2 action-plan fields to the Incident row."""
+    """将诊断结果和处置方案字段持久化到工单"""
     updates = {
         "root_cause": diagnosis.get("root_cause"),
         "confidence": diagnosis.get("confidence"),
@@ -314,7 +314,7 @@ async def _notify_diagnosis(
     runbook: dict | None = None,
     risk_assessment: dict | None = None,
 ):
-    """Push a diagnosis result card to the service's Feishu chat."""
+    """推送诊断结果卡片到飞书群"""
     from agent.channels.feishu import send_card_to_chat
     from agent.templates import render_card
     from agent.tools.cmdb import get_service_chat_id
@@ -376,7 +376,7 @@ async def _notify_diagnosis(
 
 
 def _format_action_plan(runbook: dict | None) -> str:
-    """Format structured Runbook steps into Feishu markdown."""
+    """将结构化 Runbook 步骤格式化为飞书 Markdown"""
     if not runbook:
         return "未匹配到 Runbook，请人工确认处置方案。"
     lines = []
@@ -389,7 +389,7 @@ def _format_action_plan(runbook: dict | None) -> str:
 
 
 def _format_risk_warnings(risk_assessment: dict) -> str:
-    """Prefer explicit warnings; fall back to explanatory factors for the card."""
+    """优先展示警告，没有警告时展示风险因素"""
     warnings = risk_assessment.get("warnings") or []
     factors = risk_assessment.get("factors") or []
     lines = warnings or factors

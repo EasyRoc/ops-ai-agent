@@ -11,12 +11,12 @@ logger = logging.getLogger("ops-agent.alert")
 
 
 async def _get_redis():
-    """Create a short-lived Redis client for alert deduplication."""
+    """创建短期 Redis 客户端，用于告警去重"""
     return aioredis.from_url(f"redis://{settings.redis_host}:{settings.redis_port}")
 
 
 async def parse_and_create_incident(state: AlertState) -> AlertState:
-    """Parse a normalized alert payload, deduplicate it, and create an Incident."""
+    """解析告警 payload，去重后创建工单"""
     alert = state["alert_raw"]
     redis = await _get_redis()
     logger.info(
@@ -79,7 +79,7 @@ async def parse_and_create_incident(state: AlertState) -> AlertState:
 
 
 async def _notify_feishu(incident: Incident, alert: dict):
-    """Push the initial alert notification card to Feishu."""
+    """推送初始告警通知卡片到飞书"""
     from agent.channels.feishu import send_card_to_chat
     from agent.templates import render_card
     from agent.tools.cmdb import get_service_chat_id

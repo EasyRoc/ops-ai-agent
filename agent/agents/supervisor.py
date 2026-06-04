@@ -6,9 +6,9 @@ logger = logging.getLogger("ops-agent.supervisor")
 
 
 async def run_alert_workflow(alert_raw: dict) -> dict:
-    """Run the full alert-handling workflow and return the final state.
+    """运行完整告警处理工作流并返回最终状态
 
-    这个入口主要用于测试或内部直接调用；线上 Webhook 路径在 `api/v1/alerts.py`
+    主要用于测试或内部直接调用；线上 Webhook 路径在 `api/v1/alerts.py`
     中构造同样的初始状态。
     """
     alert_name = alert_raw.get("alertname", "unknown")
@@ -35,7 +35,7 @@ async def run_alert_workflow(alert_raw: dict) -> dict:
 
 
 async def collect_context_for_incident(state: AlertState) -> AlertState:
-    """Collect metrics, logs, Kubernetes state and service metadata for RCA."""
+    """采集指标、日志、K8s 状态和服务元数据，供根因分析使用"""
     from agent.tools.prometheus import query_service_metrics
     from agent.tools.loki import query_service_logs
     from agent.tools.kubernetes import get_service_pods

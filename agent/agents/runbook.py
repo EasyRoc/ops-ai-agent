@@ -27,7 +27,7 @@ ALERT_TO_RUNBOOK = {
 
 @dataclass(frozen=True)
 class ActionStep:
-    """A single actionable line parsed from a Runbook Markdown file."""
+    """从 Runbook Markdown 文件解析的单条可操作步骤"""
 
     risk_level: str
     description: str
@@ -43,7 +43,7 @@ class ActionStep:
 
 @dataclass(frozen=True)
 class Runbook:
-    """Structured Runbook content used by RCA and approval cards."""
+    """供根因分析和审批卡片使用的结构化 Runbook 内容"""
 
     name: str
     content: str
@@ -53,23 +53,23 @@ class Runbook:
 
 
 def _normalize_alert_name(alert_name: str) -> str:
-    """Normalize alert names so HighCPUUsage, high_cpu_usage and HIGH-CPU match alike."""
+    """归一化告警名称，使 HighCPUUsage、high_cpu_usage、HIGH-CPU 等不同格式都能匹配"""
     return re.sub(r"[^A-Z0-9]", "", alert_name.upper())
 
 
 def _extract_first_inline_command(text: str) -> str:
-    """Extract the first backtick command from a Runbook step, if present."""
+    """从 Runbook 步骤文本中提取第一个反引号命令"""
     match = re.search(r"`([^`]+)`", text)
     return match.group(1).strip() if match else ""
 
 
 def _strip_inline_commands(text: str) -> str:
-    """Keep descriptions readable in cards while preserving the command separately."""
+    """去掉行内命令标记，保持描述文本在卡片中的可读性"""
     return re.sub(r"`([^`]+)`", r"\1", text).strip()
 
 
 def _parse_runbook(content: str) -> list[ActionStep]:
-    """Parse numbered Markdown steps in the form: 1. [风险等级] 描述 `命令`."""
+    """解析编号 Markdown 步骤，格式如：1. [风险等级] 描述 `命令`"""
     logger.info("开始解析 Runbook Markdown: content_length=%s", len(content))
     steps = []
     pattern = re.compile(r"^\s*\d+\.\s*\[(.+?)\]\s*(.+?)\s*$", re.MULTILINE)
@@ -87,7 +87,7 @@ def _parse_runbook(content: str) -> list[ActionStep]:
 
 
 def load_runbook(alert_name: str) -> Runbook | None:
-    """Load the best matching Runbook for an alert name."""
+    """根据告警名称加载最匹配的 Runbook"""
     normalized = _normalize_alert_name(alert_name)
     filename = None
     logger.info("开始匹配 Runbook: alert_name=%s, normalized=%s", alert_name, normalized)
@@ -115,7 +115,7 @@ def load_runbook(alert_name: str) -> Runbook | None:
 
 
 def _first_pod_name(pods: dict) -> str:
-    """Use the first observed Pod as a safe placeholder for restart-oriented steps."""
+    """取第一个 Pod 名作为重启类步骤的安全占位符"""
     pod_items = pods.get("pods") or []
     if pod_items and isinstance(pod_items[0], dict):
         return pod_items[0].get("name") or "{{pod_name}}"
@@ -123,7 +123,7 @@ def _first_pod_name(pods: dict) -> str:
 
 
 def render_runbook(runbook: Runbook, context: dict) -> list[ActionStep]:
-    """Render Runbook placeholders with runtime context collected by the supervisor."""
+    """用运行时上下文替换 Runbook 中的模板占位符"""
     service = context.get("service") or "unknown"
     namespace = "demo" if context.get("env", "prod") == "prod" else context.get("env", "demo")
     pods = context.get("pods") or {}

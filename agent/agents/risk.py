@@ -27,11 +27,11 @@ CORE_SERVICES = {"payment-service", "order-service"}
 
 
 def evaluate_risk(steps: list, alert_severity: str, service: str, env: str) -> dict:
-    """Evaluate action-plan risk in a deliberately explainable way.
+    “””对处置方案进行可解释的风险评估
 
-    返回结构里的 `factors` 是“为什么是这个等级”，`warnings` 是“审批时需要注意什么”。
+    返回结构里的 `factors` 是”为什么是这个等级”，`warnings` 是”审批时需要注意什么”。
     调用方会把这两类信息展示在飞书诊断卡片和 Incident 详情中。
-    """
+    “””
     logger.info(
         "进入风险评估: service=%s, env=%s, severity=%s, steps=%s",
         service,
