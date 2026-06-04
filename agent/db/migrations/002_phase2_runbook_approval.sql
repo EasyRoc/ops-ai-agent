@@ -1,0 +1,5 @@
+ALTER TABLE incidents
+    ADD COLUMN IF NOT EXISTS runbook_name VARCHAR(128),
+    ADD COLUMN IF NOT EXISTS action_plan JSONB,
+    ADD COLUMN IF NOT EXISTS risk_assessment JSONB,
+    ADD COLUMN IF NOT EXISTS approval_status VARCHAR(32);

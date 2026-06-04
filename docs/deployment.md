@@ -19,6 +19,10 @@
 11. [端到端联调](#11-端到端联调)
 12. [常见问题](#12-常见问题)
 
+补充文档：
+
+- [飞书卡片回调配置指南](feishu-card-callback.md)
+
 ---
 
 ## 1. 环境要求
@@ -509,6 +513,26 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 4. 将 `agent/tools/cmdb.py` 中 `oc_chat_*` 示例值替换为对应群聊的真实 `chat_id`
 
 > CMDB Mock 中的 `oc_chat_*` 仅为占位符。未替换时不影响告警接收和自动诊断，但飞书卡片无法投递。
+
+### 9.4 配置卡片审批回调
+
+Phase 2 的诊断卡片包含「批准执行」「拒绝」「转人工」按钮。首次点击按钮时，
+如果飞书提示“该应用尚未配置卡片回调”，请参考：
+
+- [飞书卡片回调配置指南](feishu-card-callback.md)
+
+回调接口为：
+
+```text
+POST /api/v1/approvals/callback
+```
+
+本地开发时不要直接填写 `localhost`，需要通过 cloudflared、ngrok 等工具生成公网
+HTTPS 地址后，再填写：
+
+```text
+https://你的公网域名/api/v1/approvals/callback
+```
 
 ---
 

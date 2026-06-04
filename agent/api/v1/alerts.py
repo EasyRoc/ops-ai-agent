@@ -47,6 +47,9 @@ async def run_diagnosis(alert_data: dict):
         "alert_parsed": None,
         "context": None,
         "diagnosis": None,
+        "runbook": None,
+        "risk_assessment": None,
+        "approval_status": None,
         "error": None,
     }
     try:

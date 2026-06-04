@@ -76,6 +76,36 @@ async def send_card_to_chat(chat_id: str, card: dict) -> dict:
     })
 
 
+async def verify_card_callback(headers: dict, body: dict) -> bool:
+    """Basic validation for Feishu card callbacks.
+
+    Feishu challenge requests use the same callback URL, so accept them before
+    checking card-action payloads.
+    """
+    if body.get("challenge"):
+        return True
+    if body.get("type") == "card_action":
+        return True
+    return body.get("header", {}).get("event_type") == "card.action.trigger"
+
+
+async def handle_card_action(action: str, incident_id: str) -> str:
+    """Map a card button action to the incident approval status."""
+    status_map = {
+        "approve": "approved",
+        "reject": "rejected",
+        "escalate": "escalated",
+    }
+    status = status_map.get(action, "pending")
+    logger.info(
+        "飞书卡片动作: incident=%s, action=%s, status=%s",
+        incident_id,
+        action,
+        status,
+    )
+    return status
+
+
 async def update_card(message_id: str, card: dict) -> dict:
     """Update an existing card message"""
     token = await _get_tenant_access_token()

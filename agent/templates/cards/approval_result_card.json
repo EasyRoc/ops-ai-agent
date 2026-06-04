@@ -1,0 +1,13 @@
+{
+  "config": { "wide_screen_mode": true },
+  "header": {
+    "title": { "tag": "plain_text", "content": "审批结果 - {{incident_id}}" },
+    "template": "{{result_color}}"
+  },
+  "elements": [
+    {
+      "tag": "markdown",
+      "content": "**审批状态：** {{approval_text}}\n**操作人：** {{operator}}\n**说明：** {{comment}}"
+    }
+  ]
+}

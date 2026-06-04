@@ -204,6 +204,9 @@ SERVICE_CHAT_IDS='{"frontend-service":"oc_xxx","order-service":"oc_xxx","payment
 未配置飞书时，告警接收、自动诊断和 Incident 保存仍然可用。不要将包含真实
 密钥的 `.env` 提交到 Git。
 
+如果点击诊断卡片里的「批准执行」「拒绝」「转人工」时弹出卡片回调配置提示，
+请按 [飞书卡片回调配置指南](docs/feishu-card-callback.md) 配置公网 HTTPS 回调地址。
+
 ## 常用地址
 
 | 服务 | 地址 |

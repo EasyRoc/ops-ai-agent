@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS incidents (
     root_cause      TEXT,
     confidence      FLOAT,
     evidence        JSONB,
+    runbook_name    VARCHAR(128),
+    action_plan     JSONB,
+    risk_assessment JSONB,
+    approval_status VARCHAR(32),
     created_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     resolved_at     TIMESTAMP WITH TIME ZONE,
     updated_at      TIMESTAMP WITH TIME ZONE DEFAULT NOW()

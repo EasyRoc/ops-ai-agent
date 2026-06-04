@@ -85,9 +85,27 @@ async def analyze_root_cause(state: AlertState) -> AlertState:
         logger.error(f"LLM 诊断失败，回退到规则诊断: {e}")
         diagnosis = _diagnose_fallback(context, alert)
 
+    runbook, risk_assessment = _build_action_plan(context, alert)
+    if runbook:
+        state["runbook"] = runbook
+        state["risk_assessment"] = risk_assessment
+        state["approval_status"] = "pending"
+
     try:
-        await _save_diagnosis(incident_id, diagnosis)
-        await _notify_diagnosis(incident_id, diagnosis, alert)
+        await _save_diagnosis(
+            incident_id,
+            diagnosis,
+            runbook=state.get("runbook"),
+            risk_assessment=state.get("risk_assessment"),
+            approval_status=state.get("approval_status"),
+        )
+        await _notify_diagnosis(
+            incident_id,
+            diagnosis,
+            alert,
+            runbook=state.get("runbook"),
+            risk_assessment=state.get("risk_assessment"),
+        )
         state["diagnosis"] = diagnosis
         logger.info(
             f"诊断完成: 工单={incident_id}, "
@@ -99,6 +117,35 @@ async def analyze_root_cause(state: AlertState) -> AlertState:
         state["error"] = str(e)
 
     return state
+
+
+def _build_action_plan(context: dict, alert: dict) -> tuple[dict | None, dict | None]:
+    from agent.agents.risk import evaluate_risk
+    from agent.agents.runbook import load_runbook, render_runbook
+
+    alert_name = alert.get("alertname", "")
+    runbook = load_runbook(alert_name)
+    if not runbook:
+        return None, None
+
+    rendered_steps = render_runbook(
+        runbook,
+        {
+            "service": alert.get("service", ""),
+            "env": alert.get("env", "prod"),
+            "pods": context.get("pods", {}),
+        },
+    )
+    risk_assessment = evaluate_risk(
+        rendered_steps,
+        alert.get("severity", "P3"),
+        alert.get("service", ""),
+        alert.get("env", "prod"),
+    )
+    return {
+        "name": runbook.name,
+        "steps": [step.to_dict() for step in rendered_steps],
+    }, risk_assessment
 
 
 async def _diagnose_with_llm(context: dict, alert: dict) -> dict:
@@ -156,21 +203,40 @@ def _diagnose_fallback(context: dict, alert: dict) -> dict:
         }
 
 
-async def _save_diagnosis(incident_id: str, diagnosis: dict):
+async def _save_diagnosis(
+    incident_id: str,
+    diagnosis: dict,
+    runbook: dict | None = None,
+    risk_assessment: dict | None = None,
+    approval_status: str | None = None,
+):
     """Persist root_cause, confidence, evidence and update status to DB."""
+    updates = {
+        "root_cause": diagnosis.get("root_cause"),
+        "confidence": diagnosis.get("confidence"),
+        "evidence": diagnosis.get("evidence"),
+        "status": "pending_approval" if approval_status == "pending" else "diagnosed",
+    }
+    if runbook:
+        updates["runbook_name"] = runbook.get("name")
+        updates["action_plan"] = runbook.get("steps", [])
+    if risk_assessment:
+        updates["risk_assessment"] = risk_assessment
+    if approval_status:
+        updates["approval_status"] = approval_status
+
     async with AsyncSessionLocal() as session:
-        await update_incident(
-            session,
-            incident_id,
-            root_cause=diagnosis.get("root_cause"),
-            confidence=diagnosis.get("confidence"),
-            evidence=diagnosis.get("evidence"),
-            status="diagnosed",
-        )
+        await update_incident(session, incident_id, **updates)
         logger.info(f"诊断结果已保存到数据库: 工单={incident_id}")
 
 
-async def _notify_diagnosis(incident_id: str, diagnosis: dict, alert: dict):
+async def _notify_diagnosis(
+    incident_id: str,
+    diagnosis: dict,
+    alert: dict,
+    runbook: dict | None = None,
+    risk_assessment: dict | None = None,
+):
     """Push a diagnosis result card to the service's Feishu chat."""
     from agent.channels.feishu import send_card_to_chat
     from agent.templates import render_card
@@ -187,16 +253,22 @@ async def _notify_diagnosis(incident_id: str, diagnosis: dict, alert: dict):
         service = alert.get("service", "unknown")
         severity = alert.get("severity", "P3")
         alert_name = alert.get("alertname", "未知")
+        action_plan = _format_action_plan(runbook)
+        risk_summary = risk_assessment or {}
 
         card = render_card(
             "diagnosis_card",
             alert_title=f"[{severity}] {service} - {alert_name}",
             severity_color=severity_color_map.get(severity, "blue"),
             root_cause=diagnosis.get("root_cause", ""),
+            action_plan=action_plan,
+            risk_level=risk_summary.get("level", "未评估"),
+            risk_score=str(risk_summary.get("score", 0)),
+            risk_warnings=_format_risk_warnings(risk_summary),
             evidence_list="\n".join(diagnosis.get("evidence", [])),
             confidence=f"{diagnosis.get('confidence', 0) * 100:.0f}",
             incident_id=incident_id,
-            status="待确认",
+            status="待审批" if runbook else "待确认",
             duration="刚刚",
         )
 
@@ -214,3 +286,22 @@ async def _notify_diagnosis(incident_id: str, diagnosis: dict, alert: dict):
             )
     except Exception as e:
         logger.error(f"诊断通知发送失败: 工单={incident_id}, 错误={e}")
+
+
+def _format_action_plan(runbook: dict | None) -> str:
+    if not runbook:
+        return "未匹配到 Runbook，请人工确认处置方案。"
+    lines = []
+    for index, step in enumerate(runbook.get("steps", []), start=1):
+        line = f"{index}. [{step.get('risk_level', '-')}] {step.get('description', '')}"
+        if step.get("command"):
+            line = f"{line}\n`{step['command']}`"
+        lines.append(line)
+    return "\n".join(lines) if lines else "Runbook 未提供处置步骤。"
+
+
+def _format_risk_warnings(risk_assessment: dict) -> str:
+    warnings = risk_assessment.get("warnings") or []
+    factors = risk_assessment.get("factors") or []
+    lines = warnings or factors
+    return "\n".join(f"- {line}" for line in lines) if lines else "- 无额外风险提示"

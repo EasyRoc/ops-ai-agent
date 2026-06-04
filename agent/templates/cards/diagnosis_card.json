@@ -12,6 +12,16 @@
     { "tag": "hr" },
     {
       "tag": "markdown",
+      "content": "**处置方案：**\n{{action_plan}}"
+    },
+    { "tag": "hr" },
+    {
+      "tag": "markdown",
+      "content": "**风险评估：** {{risk_level}}（{{risk_score}}分）\n{{risk_warnings}}"
+    },
+    { "tag": "hr" },
+    {
+      "tag": "markdown",
       "content": "**证据：**\n{{evidence_list}}"
     },
     { "tag": "hr" },
@@ -20,6 +30,29 @@
       "content": "**置信度：** {{confidence}}%"
     },
     { "tag": "hr" },
+    {
+      "tag": "action",
+      "actions": [
+        {
+          "tag": "button",
+          "text": { "tag": "plain_text", "content": "批准执行" },
+          "type": "primary",
+          "value": { "action": "approve", "incident_id": "{{incident_id}}" }
+        },
+        {
+          "tag": "button",
+          "text": { "tag": "plain_text", "content": "拒绝" },
+          "type": "danger",
+          "value": { "action": "reject", "incident_id": "{{incident_id}}" }
+        },
+        {
+          "tag": "button",
+          "text": { "tag": "plain_text", "content": "转人工" },
+          "type": "default",
+          "value": { "action": "escalate", "incident_id": "{{incident_id}}" }
+        }
+      ]
+    },
     {
       "tag": "note",
       "elements": [
