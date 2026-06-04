@@ -66,6 +66,7 @@ async def diagnose(state: AlertState) -> AlertState:
 
 
 def should_continue(state: AlertState) -> str:
+    """Route to the next node based on which state fields have been filled."""
     incident_id = state.get("incident_id", "?")
     if state.get("error"):
         logger.warning(f"[路由] 检测到错误，终止工作流 (incident={incident_id})")
@@ -84,6 +85,7 @@ def should_continue(state: AlertState) -> str:
 
 
 def build_alert_workflow() -> StateGraph:
+    """Compile the three-node alert workflow used by webhook background tasks."""
     logger.info("构建告警工作流图")
     workflow = StateGraph(AlertState)
 
