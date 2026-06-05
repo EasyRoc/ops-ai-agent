@@ -1,10 +1,10 @@
-# CPU 告警诊断与处置完整流程
+# 告警诊断与处置完整流程
 
-> 本文说明当前项目中，Demo 服务产生 CPU 告警后，从“被监控系统感知”到“Agent 诊断、审批、执行、验证、报告”的完整链路。
+> 本文说明当前项目中，服务产生告警后，从“被监控系统感知”到“Agent 诊断、审批、执行、验证、报告”的完整链路。
 >
 > 重点回答四个问题：
 >
-> - 服务 CPU 异常后，谁最先感知？
+> - 服务异常后，谁最先感知？
 > - 感知之后，哪些组件负责把告警送到 Agent？
 > - Agent 收到告警后如何收集信息和排查？
 > - 飞书审批通过后，自动执行、验证和报告如何继续推进？
@@ -25,6 +25,40 @@ Demo 服务暴露指标
 ```
 
 需要注意：**业务服务不会主动调用 Agent**。业务服务只暴露指标和健康检查；真正发现告警的是 Prometheus，真正调用 Agent 的是 Alertmanager。
+
+### 1.1 适用范围
+
+这份文档描述的是当前项目的 **通用告警处理主链路**。CPU 告警只是文档中展开最细的样例，因为它覆盖了指标异常、Runbook、风险评估、飞书审批、自动执行和恢复验证的完整路径。
+
+对当前项目来说，所有接入 `/api/v1/alerts` 的告警都会经过同一条主链路：
+
+```text
+Alertmanager Webhook
+  → Agent parse_alert
+  → Redis 去重
+  → PostgreSQL Incident
+  → Prometheus / Loki / Kubernetes / CMDB 上下文采集
+  → RCA 诊断
+  → Runbook + Risk
+  → 飞书审批
+  → 审批后执行 / 验证 / 报告
+```
+
+不同告警类型的差异主要在四个地方：
+
+- Prometheus 告警规则不同。
+- 匹配的 Runbook 不同。
+- 风险评分可能不同。
+- 恢复验证指标和阈值不同。
+
+当前代码层面的支持情况：
+
+| 告警类型 | 典型告警名 | Runbook | 恢复验证指标 | 当前说明 |
+|----------|------------|---------|--------------|----------|
+| CPU 高 | `HighCPUUsage` | `cpu_high.md` | CPU `< 70%` | 当前文档的完整样例 |
+| 错误率高 | `HighErrorRate` | `error_rate.md` | 错误率 `< 2%` | Alertmanager 默认已路由到 Agent |
+| 延迟高 | `HighLatency` / `P99` / `RT` | `latency_high.md` | 平均 RT `< 1s` | Runbook 和验证逻辑已支持，默认告警路由需按需补充 |
+| OOM / 内存 | `OOMKilled` / `OOM` / `Memory` | `oom.md` | memory 阈值 | Runbook 已支持；当前内存验证指标仍偏演示化，后续可细化为容器内存使用率 |
 
 ## 2. 核心组件职责
 
@@ -57,7 +91,7 @@ Demo 服务暴露指标
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Demo as order-service
+    participant Demo as Demo Service
     participant Prom as Prometheus
     participant AM as Alertmanager
     participant API as Agent /api/v1/alerts
@@ -70,9 +104,9 @@ sequenceDiagram
     participant User as 审批人
     participant K8s as Kubernetes
 
-    Demo->>Demo: CPU 异常或 /fault/cpu 开启 busy loop
+    Demo->>Demo: 服务异常（CPU/错误率/延迟/OOM）
     Prom->>Demo: 每 15s 抓取 /actuator/prometheus
-    Prom->>Prom: 评估 HighCPUUsage 规则
+    Prom->>Prom: 评估告警规则
     Prom->>AM: 告警进入 firing
     AM->>API: POST /api/v1/alerts
     API->>WF: 后台启动 alert workflow
@@ -97,16 +131,19 @@ sequenceDiagram
     WF->>DB: 生成报告、关闭或升级 Incident
 ```
 
-## 4. 第一段：服务如何产生 CPU 告警
+## 4. 第一段：服务如何产生可观测告警
 
-### 4.1 Demo 服务如何产生 CPU 异常
+### 4.1 Demo 服务如何产生异常
 
-当前项目的 Demo 服务是 Spring Boot 应用。以 `order-service` 为例：
+当前项目的 Demo 服务是 Spring Boot 应用，可以模拟 CPU、错误率、延迟和内存类异常。以 `order-service` 的 CPU 故障为例：
 
 - 监听端口：`8081`
 - 健康检查：`/actuator/health`
 - Prometheus 指标：`/actuator/prometheus`
-- 故障注入：`/fault/cpu?enable=true`
+- CPU 故障注入：`/fault/cpu?enable=true`
+- 错误率故障注入：`/fault/error?enable=true`
+- 延迟故障注入：`/fault/latency?ms=5000`
+- 内存故障注入：`/fault/memory?mb=10`
 
 CPU 故障由 `FaultController` 模拟：
 
@@ -116,7 +153,7 @@ while (cpuBurning) {
 }
 ```
 
-这会让容器内应用线程持续空转，进而拉高 `process_cpu_usage` 指标。
+这会让容器内应用线程持续空转，进而拉高 `process_cpu_usage` 指标。其他故障也会通过 Actuator / Micrometer 暴露为 HTTP、JVM 或应用指标，被 Prometheus 采集后用于告警判断。
 
 ### 4.2 指标如何暴露给 Prometheus
 
@@ -161,11 +198,11 @@ endpoints:
 http://order-service.demo.svc:8081/actuator/prometheus
 ```
 
-## 5. 第二段：谁感知 CPU 告警
+## 5. 第二段：谁感知告警
 
 **Prometheus 是第一感知方。**
 
-它不是收到服务主动上报，而是自己定时抓取指标，然后执行告警规则：
+它不是收到服务主动上报，而是自己定时抓取指标，然后执行告警规则。以 CPU 告警为例：
 
 ```yaml
 - alert: HighCPUUsage
@@ -187,7 +224,7 @@ http://order-service.demo.svc:8081/actuator/prometheus
 5. 告警级别标记为 `P2`。
 6. 告警携带 `service` 标签，告诉下游是哪一个服务异常。
 
-这个阶段还没有 Agent 参与。
+这个阶段还没有 Agent 参与。错误率、延迟、OOM 等场景也是同样模式：Prometheus 先根据指标和规则判断告警是否 firing。
 
 ## 6. 第三段：谁调用 Agent
 
@@ -217,7 +254,8 @@ receivers:
 
 这里有几个关键点：
 
-- 只有 `HighCPUUsage` 和 `HighErrorRate` 会路由到 Agent。
+- 当前默认配置只有 `HighCPUUsage` 和 `HighErrorRate` 会路由到 Agent。
+- 代码层面已经支持 CPU、错误率、延迟、OOM/内存类 Runbook；如果要让延迟或 OOM 真实进入 Agent，需要在 Alertmanager route 和 PrometheusRule 中补充对应告警规则。
 - `group_wait: 10s` 表示新告警会先等 10 秒再发送，避免过于碎片化。
 - `repeat_interval: 5m` 表示同一组告警持续 firing 时，Alertmanager 可能每 5 分钟重复通知。
 - Webhook 地址是 `http://host.docker.internal:8000/api/v1/alerts`，也就是本机 Agent。
@@ -326,7 +364,7 @@ ALERT_DEDUP_WINDOW=300 秒
 
 ### 9.1 Incident 初始状态
 
-新建 Incident 时会写入：
+新建 Incident 时会写入告警的结构化字段。以 CPU 告警为例：
 
 | 字段 | 示例 |
 |------|------|
@@ -357,7 +395,7 @@ Incident 创建后，Agent 会尝试发送第一张飞书卡片：
 agent/agents/supervisor.py::collect_context_for_incident
 ```
 
-它会并行意义上收集四类信息：指标、日志、Pod 状态、服务元数据。
+它会并行意义上收集四类信息：指标、日志、Pod 状态、服务元数据。不同告警都会先采集同一组上下文，只是在后续 RCA、Runbook 和 Verify 阶段关注的字段不同。
 
 ### 10.1 Prometheus 指标
 
@@ -384,6 +422,8 @@ agent/tools/prometheus.py::query_service_metrics
 - 是否有错误率升高。
 - 是否存在延迟问题。
 - 是否可能是资源不足、流量上涨、应用死循环或下游异常。
+
+对于错误率告警，Agent 会更关注 `error_rate` 和 ERROR 日志；对于延迟告警，会更关注 `rt_avg`、QPS 和依赖服务；对于 OOM/内存类告警，会更关注 JVM 内存、Pod 重启次数和 Kubernetes 状态。
 
 ### 10.2 Loki 日志
 
@@ -441,7 +481,7 @@ GET http://localhost:8001/api/v1/namespaces/demo/pods?labelSelector=app=order-se
 
 这些信息用于判断：
 
-- 是所有 Pod 都 CPU 高，还是只有个别 Pod 异常。
+- 是所有 Pod 都异常，还是只有个别 Pod 异常。
 - Pod 是否 NotReady。
 - 是否存在 CrashLoopBackOff、频繁重启等情况。
 - 当前服务副本数是多少，Runbook 扩容建议会依赖它。
@@ -485,7 +525,7 @@ agent/agents/rca.py::analyze_root_cause
 
 ### 11.1 LLM 诊断 Prompt 包含什么
 
-Agent 会把以下内容拼成 Prompt：
+Agent 会把告警和上下文拼成 Prompt。以 CPU 告警为例，Prompt 会包含：
 
 - 告警名称：`HighCPUUsage`
 - 服务：`order-service`
@@ -522,13 +562,22 @@ LLM 被要求输出严格 JSON：
 | CPU 告警 + Pod 不健康 + QPS 低 | 倾向判断为单实例异常或代码死循环 |
 | 其他情况 | 输出低置信度结论，建议人工确认 |
 
-所以即使没有配置 DeepSeek，Agent 也能继续完成基本诊断流程。
+当前规则兜底对 CPU 场景最完整；其他告警类型也会得到低置信度兜底结果，并继续完成 Runbook、风险评估和审批流程。所以即使没有配置 DeepSeek，Agent 也能继续完成基本诊断流程。
 
 ## 12. 第九段：Runbook 如何生成处置方案
 
 RCA 完成后，Agent 会根据告警名称匹配 Runbook。
 
-CPU 告警会匹配：
+当前匹配关系：
+
+| 告警关键词 | Runbook | 说明 |
+|------------|---------|------|
+| `HighCPUUsage` / `CPU` | `cpu_high.md` | CPU 高负载 |
+| `HighErrorRate` / `ERROR` | `error_rate.md` | 错误率过高 |
+| `HighLatency` / `LATENCY` / `P99` / `RT` | `latency_high.md` | 延迟升高 |
+| `OOMKilled` / `OOM` / `MEMORY` | `oom.md` | OOM 或内存异常 |
+
+以 CPU 告警为例，会匹配：
 
 ```text
 runbooks/cpu_high.md
@@ -709,9 +758,9 @@ kubectl describe pod
 
 这样设计是为了避免一个 Runbook 中同时有扩容、删 Pod、回滚等多个动作时，被一次审批全部串行执行。
 
-### 16.2 CPU Runbook 的典型执行动作
+### 16.2 Runbook 的典型执行动作
 
-CPU 告警下，典型自动执行命令是：
+不同 Runbook 会给出不同处置动作。以 CPU 告警为例，典型自动执行命令是：
 
 ```bash
 kubectl scale deployment order-service -n demo --replicas=4
@@ -723,20 +772,22 @@ kubectl scale deployment order-service -n demo --replicas=4
 
 执行成功后，`verify` 节点会轮询 Prometheus。
 
-CPU 告警对应验证规则：
+当前验证指标按告警名称匹配：
 
-```text
-metric = cpu
-threshold = 70%
-```
+| 告警关键词 | 验证指标 | 恢复阈值 | 说明 |
+|------------|----------|----------|------|
+| `CPU` | `cpu` | `< 70%` | CPU 恢复到安全水位 |
+| `ERROR` | `error_rate` | `< 2%` | 错误率恢复 |
+| `LATENCY` / `RT` / `P99` | `rt_avg` | `< 1s` | 平均响应时间恢复 |
+| `OOM` / `MEMORY` | `memory` | `< 0.85` | 当前为演示阈值，后续可细化为容器内存使用率 |
 
-也就是说，执行后 Agent 会多次查询：
+以 CPU 告警为例，执行后 Agent 会多次查询：
 
 ```text
 max(process_cpu_usage{service="order-service"}) * 100
 ```
 
-如果 CPU 降到 70% 以下：
+如果对应指标降到阈值以下：
 
 ```text
 recovered=True
@@ -792,7 +843,7 @@ agent/agents/report.py
 
 ## 19. 状态流转
 
-一次 CPU 告警的典型状态流转：
+一次告警的典型状态流转：
 
 ```text
 diagnosing
@@ -828,12 +879,12 @@ executed
   → escalated
 ```
 
-## 20. 当前 CPU 告警链路中的关键时间
+## 20. 当前告警链路中的关键时间
 
 | 阶段 | 典型耗时 |
 |------|----------|
 | Prometheus 抓取间隔 | 15 秒 |
-| CPU 告警持续条件 | 1 分钟 |
+| 告警持续条件 | 当前 CPU / 错误率规则为 1 分钟；其他规则按配置决定 |
 | Alertmanager group_wait | 10 秒 |
 | Agent Webhook 返回 | 立即返回，诊断后台跑 |
 | LLM 诊断 | 取决于网络和模型响应 |
@@ -841,10 +892,10 @@ executed
 | 自动执行 kubectl | 默认 60 秒超时 |
 | 恢复验证 | 默认最多 300 秒，每 15 秒查一次 |
 
-所以，从 CPU 真正升高到飞书收到诊断审批卡片，通常会经历：
+所以，从服务指标真正异常到飞书收到诊断审批卡片，通常会经历：
 
 ```text
-指标抓取延迟 + 1 分钟告警持续条件 + Alertmanager group_wait + Agent 诊断耗时
+指标抓取延迟 + 告警持续条件 + Alertmanager group_wait + Agent 诊断耗时
 ```
 
 ## 21. 如何手动观察每一段
@@ -854,6 +905,8 @@ executed
 ```bash
 curl -s http://localhost:8081/actuator/prometheus | grep process_cpu_usage
 ```
+
+如果排查错误率或延迟，可以在 `/actuator/prometheus` 中查看 `http_server_requests_seconds_*` 相关指标。
 
 ### 21.2 查看 Prometheus 告警
 
@@ -981,6 +1034,8 @@ Agent 是独立 FastAPI 服务，Prometheus/Alertmanager 只是把告警 Webhook
 
 ## 24. 一条 CPU 告警的完整样例
 
+下面用 CPU 告警作为完整样例。其他告警类型会复用同一条 Agent 主链路，只是在 Prometheus 规则、Runbook 和恢复验证指标上不同。
+
 假设 `order-service` 开启 CPU 故障：
 
 ```bash
@@ -1020,4 +1075,4 @@ curl -s -X POST "http://localhost:8081/fault/cpu?enable=true"
 29. 如果恢复，Agent 生成 Markdown 故障报告。
 30. Agent 将 Incident 标记为 `resolved`。
 
-这就是当前项目里 CPU 告警从产生到闭环的完整路径。
+这就是当前项目里 CPU 告警从产生到闭环的完整路径。错误率、延迟、OOM 等告警会沿用同样的处理框架，只替换“触发规则、处置 Runbook、验证指标”这几处差异。

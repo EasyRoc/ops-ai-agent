@@ -29,6 +29,12 @@ Alertmanager 告警，自动采集指标、日志、Kubernetes 状态和服务�
 
 ![告警诊断、审批与自动处置流程](docs/img/approval-flow.svg)
 
+## 深入文档
+
+- [告警诊断与处置完整流程](docs/alert-diagnosis-flow.md)：说明服务告警如何被 Prometheus 感知、Alertmanager 如何调用 Agent、Agent 如何采集上下文、诊断、审批、执行、验证和生成报告。
+- [测试用例文档](docs/test-cases.md)：覆盖本地启动、可观测栈、API、飞书审批、Phase 1/2/3 E2E、去重、执行安全和清理恢复。
+- [飞书卡片回调配置指南](docs/feishu-card-callback.md)：说明飞书按钮回调、公网 HTTPS 地址和本地联调注意事项。
+
 ## 快速开始
 
 ### 1. 选择运行环境
