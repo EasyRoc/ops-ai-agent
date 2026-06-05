@@ -241,6 +241,10 @@ ops-ai-agent/
 
 ## 开发验证
 
+完整手工测试和端到端验收步骤见：
+
+[Ops AI Agent 测试用例文档](docs/test-cases.md)
+
 ```bash
 bash -n ops.sh
 bash scripts/tests/test_ops.sh

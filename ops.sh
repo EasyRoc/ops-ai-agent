@@ -723,6 +723,8 @@ start_existing() {
 restart_runtime() {
   check_dependencies
   check_docker_daemon
+  start_data_services
+  wait_for_data_services
   require_kind_cluster
   require_monitoring_stack
   require_demo_services

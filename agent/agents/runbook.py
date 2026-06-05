@@ -7,6 +7,11 @@ logger = logging.getLogger("ops-agent.runbook")
 
 RUNBOOK_DIR = Path(__file__).resolve().parents[2] / "runbooks"
 
+# 本项目主要面向本地 Kind 演示。连续点击批准或反复跑 E2E 时，如果按当前副本数
+# 简单翻倍，Java Demo 很容易从 2→4→8→16→32，把本地集群压到探活超时。
+# 因此对自动生成的扩容建议加一个演示环境保护上限。
+DEMO_MAX_SCALE_REPLICAS = 4
+
 # 告警名可能来自 Prometheus 规则，也可能来自手工测试 payload。
 # 这里先做轻量关键词映射，后续如果 Runbook 多起来，可以替换成 YAML 元数据或向量检索。
 ALERT_TO_RUNBOOK = {
@@ -122,29 +127,45 @@ def _first_pod_name(pods: dict) -> str:
     return "{{pod_name}}"
 
 
+def _target_replicas(current_replicas: int) -> int:
+    """计算建议扩容目标，避免本地 Demo 连续翻倍导致资源耗尽。"""
+    target = max(current_replicas * 2, 1)
+    capped = min(target, DEMO_MAX_SCALE_REPLICAS)
+    if capped < target:
+        logger.info(
+            "Runbook 扩容目标已按本地 Demo 上限收敛: current=%s, target=%s, capped=%s",
+            current_replicas,
+            target,
+            capped,
+        )
+    return capped
+
+
 def render_runbook(runbook: Runbook, context: dict) -> list[ActionStep]:
     """用运行时上下文替换 Runbook 中的模板占位符"""
     service = context.get("service") or "unknown"
     namespace = "demo" if context.get("env", "prod") == "prod" else context.get("env", "demo")
     pods = context.get("pods") or {}
     current_replicas = int(pods.get("total") or 2)
+    target_replicas = _target_replicas(current_replicas)
 
     # 这些默认值只用于生成“建议方案”。Phase 2 不执行命令，所以宁可保守、可读。
     replacements = {
         "{{service}}": service,
         "{{namespace}}": namespace,
-        "{{replicas}}": str(max(current_replicas * 2, 1)),
+        "{{replicas}}": str(target_replicas),
         "{{original_replicas}}": str(max(current_replicas, 1)),
         "{{pod_name}}": _first_pod_name(pods),
         "{{new_limit}}": "768Mi",
         "{{original_limit}}": "512Mi",
     }
     logger.info(
-        "开始渲染 Runbook: runbook=%s, service=%s, namespace=%s, replicas=%s, pod=%s",
+        "开始渲染 Runbook: runbook=%s, service=%s, namespace=%s, current_replicas=%s, target_replicas=%s, pod=%s",
         runbook.name,
         service,
         namespace,
         current_replicas,
+        target_replicas,
         replacements["{{pod_name}}"],
     )
 

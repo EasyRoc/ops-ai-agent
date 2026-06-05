@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Phase 3 端到端测试：审批通过 → 自动执行 → 恢复验证 → 故障报告
+# 测试流程：发告警 → 诊断+审批 → 模拟批准 → 验证执行记录 → 验证故障报告 → 验证 Web Console
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://localhost:8000}"
@@ -8,8 +10,10 @@ FINGERPRINT="phase3-$(date +%s)-$RANDOM"
 echo "== Phase 3 E2E: Approval -> Execute -> Verify -> Report =="
 echo "Agent API: ${BASE_URL}"
 
+# 记录测试前最新工单 ID，用于后续判断是否有新工单
 before_latest_id="$(curl -fsS "${BASE_URL}/api/v1/incidents?limit=1" | python3 -c 'import json,sys; data=json.load(sys.stdin); incidents=data.get("incidents") or []; print(incidents[0]["id"] if incidents else "")')"
 
+# 第1步：发送模拟 HighCPUUsage 告警到 Agent Webhook
 echo "[1/6] 触发 HighCPUUsage 告警"
 curl -fsS -X POST "${BASE_URL}/api/v1/alerts" \
   -H "Content-Type: application/json" \
@@ -32,6 +36,7 @@ curl -fsS -X POST "${BASE_URL}/api/v1/alerts" \
     }]
   }" >/dev/null
 
+# 第2步：等待工单创建 + 诊断完成 + 审批状态为 pending（最长 120 秒）
 incident_id=""
 echo "[2/6] 等待诊断和待审批状态"
 for _ in $(seq 1 60); do
@@ -54,11 +59,13 @@ if [ -z "${incident_id}" ]; then
 fi
 echo "Incident: ${incident_id}"
 
+# 第3步：模拟飞书卡片回调 → 批准执行，触发 Phase 3 execution_workflow
 echo "[3/6] 模拟飞书批准执行"
 curl -fsS -X POST "${BASE_URL}/api/v1/approvals/callback" \
   -H "Content-Type: application/json" \
   -d "{\"type\":\"card_action\",\"operator\":{\"name\":\"phase3-e2e\"},\"action\":{\"value\":{\"action\":\"approve\",\"incident_id\":\"${incident_id}\"}}}" >/dev/null
 
+# 第4步：轮询等待执行记录写入 executions 表（最长 120 秒），验证执行成功
 echo "[4/6] 等待执行记录"
 execution_status=""
 for _ in $(seq 1 60); do
@@ -76,6 +83,7 @@ if [ "${execution_status}" != "success" ]; then
 fi
 echo "Execution status: ${execution_status}"
 
+# 第5步：等待故障报告生成（最长 180 秒），验证报告包含执行结果和验证结果
 echo "[5/6] 等待故障报告"
 for _ in $(seq 1 90); do
   if curl -fsS "${BASE_URL}/api/v1/reports/${incident_id}" >/tmp/phase3-report.json 2>/dev/null; then
@@ -98,6 +106,7 @@ assert "## 验证结果" in content, content
 print("Report sections verified")
 PY
 
+# 第6步：验证 Phase 3 新增的 Web Console 页面可访问
 echo "[6/6] 校验 Web Console 页面"
 curl -fsS "${BASE_URL}/executions.html" >/dev/null
 curl -fsS "${BASE_URL}/reports.html" >/dev/null

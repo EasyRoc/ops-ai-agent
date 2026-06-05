@@ -298,7 +298,8 @@ test_documentation_recommends_ops_cli() {
   assert_contains "$readme" 'admin / admin123' 'README documents local Grafana login'
   assert_contains "$readme" '8/8 targets UP' 'README documents Prometheus target health'
   assert_contains "$readme" 'SERVICE_CHAT_IDS' 'README documents Feishu service chat mapping'
-  assert_contains "$readme" 'flowchart LR' 'README includes monitoring alert flowchart'
+  assert_contains "$readme" 'docs/img/architecture.svg' 'README includes architecture SVG'
+  assert_contains "$readme" 'docs/img/approval-flow.svg' 'README includes approval flow SVG'
   assert_contains "$readme" 'docs/deployment.md' 'README links detailed deployment guide'
   assert_contains "$deployment" './ops.sh help' 'deployment guide links CLI help'
   if [[ "$deployment" != *'scripts/start-all.sh'* ]]; then
@@ -326,6 +327,39 @@ test_e2e_refuses_unhealthy_environment() {
     fail 'E2E preflight exits non-zero for unhealthy environment'
   fi
   assert_contains "$output" 'Agent 不可达' 'E2E preflight names unavailable component'
+  remove_fixture
+}
+
+test_restart_starts_data_services_before_agent() {
+  new_fixture
+  source_ops
+  local trace="$FIXTURE/trace"
+  check_dependencies() { printf 'check-deps\n' >>"$trace"; }
+  check_docker_daemon() { printf 'check-docker\n' >>"$trace"; }
+  start_data_services() { printf 'start-data\n' >>"$trace"; }
+  wait_for_data_services() { printf 'wait-data\n' >>"$trace"; }
+  require_kind_cluster() { printf 'require-kind\n' >>"$trace"; }
+  require_monitoring_stack() { printf 'require-monitoring\n' >>"$trace"; }
+  require_demo_services() { printf 'require-demo\n' >>"$trace"; }
+  stop_runtime_processes() { printf 'stop-runtime\n' >>"$trace"; }
+  start_runtime_processes() { printf 'start-runtime\n' >>"$trace"; }
+  show_status() { printf 'status\n' >>"$trace"; }
+
+  restart_runtime
+
+  assert_equal "$(cat "$trace")" "$(cat <<'EOF'
+check-deps
+check-docker
+start-data
+wait-data
+require-kind
+require-monitoring
+require-demo
+stop-runtime
+start-runtime
+status
+EOF
+)" 'restart starts PostgreSQL and Redis before Agent'
   remove_fixture
 }
 
@@ -463,6 +497,7 @@ run_all() {
   test_missing_dependency_prints_platform_hint
   test_documentation_recommends_ops_cli
   test_e2e_refuses_unhealthy_environment
+  test_restart_starts_data_services_before_agent
   test_retry_command_recovers_from_transient_failure
   test_existing_helm_repo_does_not_require_network_refresh
   test_cached_helm_chart_is_preferred
