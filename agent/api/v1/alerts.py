@@ -45,6 +45,7 @@ async def run_diagnosis(alert_data: dict):
         "alert_raw": alert_data,
         "incident_id": None,
         "alert_parsed": None,
+        "duplicate_alert": None,
         "context": None,
         "diagnosis": None,
         "runbook": None,

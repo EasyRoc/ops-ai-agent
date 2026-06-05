@@ -21,6 +21,7 @@ async def run_alert_workflow(alert_raw: dict) -> dict:
         "alert_raw": alert_raw,
         "incident_id": None,
         "alert_parsed": None,
+        "duplicate_alert": None,
         "context": None,
         "diagnosis": None,
         "runbook": None,

@@ -9,6 +9,7 @@ class AlertState(TypedDict):
     alert_raw: dict            # Alertmanager 原始告警数据（labels、annotations、fingerprint 等）
     incident_id: Optional[str]  # 工单ID，parse_alert 节点去重后创建并回填
     alert_parsed: Optional[dict] # 解析后的告警结构化字段（service、env、severity 等）
+    duplicate_alert: Optional[bool] # 告警去重命中标记；为 True 时不再触发诊断和通知
     context: Optional[dict]     # collect_context 采集的可观测性数据（metrics、logs、pods、cmdb）
     diagnosis: Optional[dict]   # diagnose 节点输出的根因分析结果（root_cause、confidence、evidence）
     runbook: Optional[dict]     # Phase 2: 匹配到的 Runbook 和结构化处置步骤
@@ -70,7 +71,10 @@ async def diagnose(state: AlertState) -> AlertState:
 
 
 async def execute(state: AlertState) -> AlertState:
-    """Node: execute approved runbook action."""
+    """Node: execute approved runbook action.
+
+    审批通过后自动执行白名单内的 kubectl 命令，结果写入 execution_result。
+    """
     from agent.agents.executor import execute as execute_node
 
     logger.info("[自动执行] 进入执行节点: incident=%s", state.get("incident_id", "-"))
@@ -86,7 +90,10 @@ async def execute(state: AlertState) -> AlertState:
 
 
 async def verify(state: AlertState) -> AlertState:
-    """Node: verify recovery after execution."""
+    """Node: verify recovery after execution.
+
+    轮询 Prometheus 指标判断执行后是否恢复，超时或未恢复则后续路由到 escalate。
+    """
     from agent.agents.verify import verify as verify_node
 
     logger.info("[恢复验证] 进入验证节点: incident=%s", state.get("incident_id", "-"))
@@ -102,7 +109,10 @@ async def verify(state: AlertState) -> AlertState:
 
 
 async def report(state: AlertState) -> AlertState:
-    """Node: generate incident report."""
+    """Node: generate incident report.
+
+    汇总告警→诊断→执行→验证全链路数据，调用 LLM 生成故障报告，写入 reports 表。
+    """
     from agent.agents.report import report as report_node
 
     logger.info("[报告沉淀] 进入报告节点: incident=%s", state.get("incident_id", "-"))
@@ -116,7 +126,10 @@ async def report(state: AlertState) -> AlertState:
 
 
 async def escalate(state: AlertState) -> AlertState:
-    """Node: stop automation and keep the incident in manual escalation."""
+    """Node: stop automation and keep the incident in manual escalation.
+
+    执行失败、验证超时或任一节点异常时进入此节点，将审批状态置为 escalated，终止自动链路。
+    """
     incident_id = state.get("incident_id") or "-"
     reason = (
         state.get("error")
@@ -135,6 +148,9 @@ def should_continue(state: AlertState) -> str:
     if state.get("error"):
         logger.warning(f"[路由] 检测到错误，终止工作流 (incident={incident_id})")
         return END
+    if state.get("duplicate_alert"):
+        logger.info(f"[路由] 重复告警命中，复用已有工单并终止工作流 (incident={incident_id})")
+        return END
     if state.get("diagnosis"):
         logger.info(f"[路由] 诊断完成，终止工作流 (incident={incident_id})")
         return END
@@ -149,7 +165,11 @@ def should_continue(state: AlertState) -> str:
 
 
 def route_after_execute(state: AlertState) -> str:
-    """执行成功才进入验证，否则升级人工。"""
+    """执行节点之后的路由判断。
+
+    执行成功 → verify 验证节点；
+    执行失败 / 有 error → escalate 人工升级。
+    """
     incident_id = state.get("incident_id", "-")
     if state.get("error"):
         logger.warning("[路由] 执行后发现错误，升级人工: incident=%s", incident_id)
@@ -167,7 +187,11 @@ def route_after_execute(state: AlertState) -> str:
 
 
 def route_after_verify(state: AlertState) -> str:
-    """恢复验证通过才生成报告，否则升级人工。"""
+    """验证节点之后的路由判断。
+
+    恢复验证通过 → generate_report 报告生成节点；
+    验证超时 / 未恢复 → escalate 人工升级。
+    """
     incident_id = state.get("incident_id", "-")
     verification_result = state.get("verification_result") or {}
     if verification_result.get("recovered"):
@@ -207,33 +231,43 @@ def build_alert_workflow() -> StateGraph:
 
 
 def build_execution_workflow() -> StateGraph:
-    """Compile the Phase 3 workflow triggered after manual approval."""
+    """构建 Phase 3 执行工作流（审批通过后触发）。
+
+    工作流链路：execute → verify → generate_report → END
+    异常分支：execute/verify 任一失败 → escalate → END
+
+    当前仅执行白名单内的低/中风险命令，高风险或非白名单命令仍需人工处理。
+    """
     logger.info("构建 Phase 3 执行工作流图")
     workflow = StateGraph(AlertState)
 
-    workflow.add_node("execute", execute)
-    workflow.add_node("verify", verify)
-    workflow.add_node("generate_report", report)
-    workflow.add_node("escalate", escalate)
+    # 注册四个节点
+    workflow.add_node("execute", execute)           # 自动执行白名单命令
+    workflow.add_node("verify", verify)             # 轮询指标验证恢复
+    workflow.add_node("generate_report", report)     # 生成故障报告
+    workflow.add_node("escalate", escalate)          # 终止自动链路，转人工
 
+    # 入口：审批通过后从 execute 开始
     workflow.set_entry_point("execute")
     workflow.add_conditional_edges(
         "execute",
         route_after_execute,
         {
-            "verify": "verify",
-            "escalate": "escalate",
+            "verify": "verify",       # 执行成功 → 验证
+            "escalate": "escalate",   # 执行失败 → 人工
         },
     )
     workflow.add_conditional_edges(
         "verify",
         route_after_verify,
         {
-            "generate_report": "generate_report",
-            "escalate": "escalate",
+            "generate_report": "generate_report",  # 验证通过 → 报告
+            "escalate": "escalate",                # 验证失败 → 人工
         },
     )
+    # 报告生成后工作流结束
     workflow.add_edge("generate_report", END)
+    # 人工升级后工作流结束
     workflow.add_edge("escalate", END)
 
     compiled = workflow.compile()

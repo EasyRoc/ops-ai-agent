@@ -39,6 +39,7 @@ async def parse_and_create_incident(state: AlertState) -> AlertState:
             logger.info(f"重复告警已跳过: {alert.get('alertname')} (指纹={fingerprint}, 工单={existing_id})")
             state["incident_id"] = existing_id
             state["alert_parsed"] = alert
+            state["duplicate_alert"] = True
             return state
 
         # 先写空占位可以降低并发 webhook 同时创建多个 Incident 的概率。
@@ -64,6 +65,7 @@ async def parse_and_create_incident(state: AlertState) -> AlertState:
 
             state["incident_id"] = incident.id
             state["alert_parsed"] = alert
+            state["duplicate_alert"] = False
             logger.info(f"工单已创建: {incident.id} 服务={incident.service}")
 
             # 飞书通知是 best-effort：失败会记录日志，但不影响 Incident 主流程。

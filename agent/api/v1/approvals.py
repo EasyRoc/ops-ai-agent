@@ -154,8 +154,14 @@ async def approval_callback(request: Request, background_tasks: BackgroundTasks)
 
     approval_status = await handle_card_action(action, incident_id)
     operator = extract_operator(body)
+
+    # 将审批结果写入 Incident 表（status、approval_status）
     background_tasks.add_task(_update_incident_status, incident_id, approval_status)
+
+    # 把飞书原卡片替换为审批结果卡片，去掉按钮避免重复操作
     background_tasks.add_task(_update_feishu_card, body, incident_id, approval_status)
+
+    # 审计日志：记录谁在什么时间做了什么审批操作
     background_tasks.add_task(
         _write_approval_audit,
         incident_id,
@@ -163,8 +169,11 @@ async def approval_callback(request: Request, background_tasks: BackgroundTasks)
         approval_status,
         {"action": action, "callback_type": callback_type},
     )
+
+    # 审批通过后触发 Phase 3 执行工作流（execute → verify → report）
     if approval_status == "approved":
         background_tasks.add_task(run_execution_workflow, incident_id, body)
+
     logger.info(
         "审批回调后台任务已入队: incident=%s, approval_status=%s, operator=%s",
         incident_id,
@@ -232,6 +241,7 @@ async def _load_execution_state(incident_id: str, operator: str) -> AlertState |
             "severity": incident.severity,
             "value": incident.alert_value or "",
         },
+        "duplicate_alert": None,
         "context": {
             "service": incident.service,
             "env": incident.env,
