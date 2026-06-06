@@ -119,7 +119,8 @@ async def analyze_root_cause(state: AlertState) -> AlertState:
     )
 
     # Phase 2 的关键边界：Agent 只产出处置方案和风险结论，不自动执行命令。
-    runbook, risk_assessment = _build_action_plan(context, alert)
+    # Phase A 增加 AI 兜底：预置 Runbook 未命中时，允许 LLM 生成“待人工审批”的建议方案。
+    runbook, risk_assessment = await _build_action_plan(context, alert, diagnosis)
     if runbook:
         state["runbook"] = runbook
         state["risk_assessment"] = risk_assessment
@@ -165,8 +166,12 @@ async def analyze_root_cause(state: AlertState) -> AlertState:
     return state
 
 
-def _build_action_plan(context: dict, alert: dict) -> tuple[dict | None, dict | None]:
-    """构建结构化的 Runbook 处置方案及其风险评估"""
+async def _build_action_plan(context: dict, alert: dict, diagnosis: dict) -> tuple[dict | None, dict | None]:
+    """构建结构化处置方案及其风险评估。
+
+    优先使用预置 Runbook。只有 Runbook 完全未匹配时，才进入 AI 兜底方案生成，
+    这样常见告警仍保持稳定、可解释，未知告警则不再直接中断诊断流程。
+    """
     from agent.agents.risk import evaluate_risk
     from agent.agents.runbook import load_runbook, render_runbook
 
@@ -179,8 +184,8 @@ def _build_action_plan(context: dict, alert: dict) -> tuple[dict | None, dict | 
     )
     runbook = load_runbook(alert_name)
     if not runbook:
-        logger.info("处置方案生成跳过: 未匹配 Runbook, alert=%s", alert_name)
-        return None, None
+        logger.info("未匹配预置 Runbook，尝试进入 AI 兜底方案生成: alert=%s", alert_name)
+        return await _build_ai_fallback_plan(context, alert, diagnosis)
 
     rendered_steps = render_runbook(
         runbook,
@@ -206,6 +211,90 @@ def _build_action_plan(context: dict, alert: dict) -> tuple[dict | None, dict | 
     return {
         "name": runbook.name,
         "steps": [step.to_dict() for step in rendered_steps],
+    }, risk_assessment
+
+
+async def _build_ai_fallback_plan(context: dict, alert: dict, diagnosis: dict) -> tuple[dict | None, dict | None]:
+    """为未命中 Runbook 的告警生成 AI 兜底方案，并继续套用统一风险评估。
+
+    Fallback Agent 只负责“提出建议”。这里会把 LLM 生成的步骤转成 ActionStep，
+    再交给 risk.evaluate_risk 复用白名单、核心服务、生产环境等安全规则。
+    """
+    from agent.agents.fallback import generate_ai_action_plan
+    from agent.agents.risk import evaluate_risk
+    from agent.agents.runbook import ActionStep
+
+    alert_name = alert.get("alertname", "")
+    service = alert.get("service", "")
+    env = alert.get("env", "prod")
+    severity = alert.get("severity", "P3")
+
+    logger.info(
+        "开始 AI 兜底处置方案生成: alert=%s, service=%s, env=%s, severity=%s",
+        alert_name,
+        service or "unknown",
+        env,
+        severity,
+    )
+    ai_plan = await generate_ai_action_plan(context, alert, diagnosis)
+    if not ai_plan:
+        logger.warning("AI 兜底处置方案生成失败: alert=%s, service=%s", alert_name, service or "unknown")
+        return None, None
+
+    ai_steps = [
+        ActionStep(
+            risk_level=step.get("risk_level", "中风险"),
+            description=step.get("description", ""),
+            command=step.get("command", ""),
+        )
+        for step in ai_plan.get("steps", [])
+    ]
+    if not ai_steps:
+        logger.warning("AI 兜底方案没有可用步骤: alert=%s, service=%s", alert_name, service or "unknown")
+        return None, None
+
+    risk_assessment = evaluate_risk(ai_steps, severity, service, env)
+    ai_confidence = float(ai_plan.get("confidence", 0.5) or 0.5)
+
+    # 把 AI 来源信息写进风险结果，便于飞书卡片、数据库和后续审批流判断。
+    risk_assessment["ai_generated"] = True
+    risk_assessment["ai_confidence"] = ai_confidence
+    risk_assessment["ai_reasoning"] = ai_plan.get("ai_reasoning", "")
+    risk_assessment["verification"] = ai_plan.get("verification", {})
+    risk_assessment.setdefault("warnings", [])
+    risk_assessment["warnings"].insert(0, "AI 自主生成方案，未匹配预置 Runbook，请仔细确认")
+    risk_assessment.setdefault("factors", [])
+    risk_assessment["factors"].append(f"AI 兜底方案，置信度: {ai_confidence:.0%}")
+
+    # AI 生成的高风险方案只能作为建议，不能进入自动执行通道。
+    if risk_assessment.get("level") in {"高风险", "极高风险"}:
+        risk_assessment["allowed"] = False
+        risk_assessment["warnings"].append("AI 自评高风险，已自动禁止自动执行，需人工研判")
+        logger.warning(
+            "AI 兜底方案被标记为高风险: alert=%s, service=%s, risk=%s, score=%s",
+            alert_name,
+            service or "unknown",
+            risk_assessment.get("level"),
+            risk_assessment.get("score"),
+        )
+
+    logger.info(
+        "AI 兜底处置方案生成完成: alert=%s, service=%s, steps=%s, risk=%s/%s, allowed=%s, confidence=%.2f",
+        alert_name,
+        service or "unknown",
+        len(ai_steps),
+        risk_assessment.get("level"),
+        risk_assessment.get("score"),
+        risk_assessment.get("allowed"),
+        ai_confidence,
+    )
+    return {
+        "name": ai_plan.get("name", "ai_fallback"),
+        "steps": [step.to_dict() for step in ai_steps],
+        "ai_generated": True,
+        "ai_reasoning": ai_plan.get("ai_reasoning", ""),
+        "verification": ai_plan.get("verification", {}),
+        "confidence": ai_confidence,
     }, risk_assessment
 
 
@@ -378,8 +467,13 @@ async def _notify_diagnosis(
 def _format_action_plan(runbook: dict | None) -> str:
     """将结构化 Runbook 步骤格式化为飞书 Markdown"""
     if not runbook:
-        return "未匹配到 Runbook，请人工确认处置方案。"
+        return "未匹配到 Runbook，且 AI 兜底方案生成失败，请人工确认处置方案。"
     lines = []
+    if runbook.get("ai_generated"):
+        lines.append("**AI 自主分析方案（未匹配预置 Runbook）**")
+        if runbook.get("ai_reasoning"):
+            lines.append(f"推理过程：{runbook['ai_reasoning']}")
+
     for index, step in enumerate(runbook.get("steps", []), start=1):
         line = f"{index}. [{step.get('risk_level', '-')}] {step.get('description', '')}"
         if step.get("command"):
