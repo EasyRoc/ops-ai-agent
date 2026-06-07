@@ -41,7 +41,7 @@
 
   <rect width="1200" height="640" rx="28" fill="url(#bg)"/>
   <text x="48" y="58" class="title">告警诊断、审批与自动处置流程</text>
-  <text x="48" y="86" class="subtitle">Phase 3：人工确认后执行白名单动作，随后验证恢复并生成故障报告</text>
+  <text x="48" y="86" class="subtitle">人工确认后执行白名单动作，随后验证恢复并生成故障报告</text>
 
   <rect x="42" y="146" width="154" height="102" rx="18" class="step step-warn"/>
   <text x="70" y="180" class="num">01</text>
