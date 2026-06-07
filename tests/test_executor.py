@@ -46,6 +46,7 @@ class ExecutorWorkflowTest(IsolatedAsyncioTestCase):
             "risk_assessment": {"allowed": True, "level": "高风险"},
             "execution_result": None,
             "error": None,
+            "retry_count": 3,
         }
 
         with (
@@ -59,6 +60,7 @@ class ExecutorWorkflowTest(IsolatedAsyncioTestCase):
         self.assertEqual(result["execution_result"]["status"], "success")
         self.assertEqual(result["execution_result"]["executed"], 1)
         record_execution.assert_awaited()
+        self.assertEqual(record_execution.await_args.kwargs["round_num"], 3)
         write_audit.assert_awaited()
 
     async def test_execute_approved_plan_escalates_when_risk_not_allowed(self):

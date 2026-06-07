@@ -17,6 +17,8 @@ class AlertState(TypedDict):
     approval_status: Optional[str]   # Phase 2: pending / approved / rejected / escalated
     execution_result: Optional[dict]  # Phase 3: 自动执行结果
     verification_result: Optional[dict]  # Phase 3: 执行后的恢复验证结果
+    retry_count: Optional[int]  # Phase C: 当前 AI 重试轮次，0/None 表示尚未进入重试
+    retry_history: Optional[list[dict]]  # Phase C: AI 重试历史摘要，临时存储在 risk_assessment.retry 中
     report: Optional[dict]  # Phase 3: 故障报告生成结果
     operator: Optional[str]  # Phase 3: 审批/执行操作人
     error: Optional[str]        # 任意节点异常时写入，触发工作流提前终止
