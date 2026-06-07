@@ -154,13 +154,16 @@ async def record_execution(
     operator: str,
     status: str,
     result: dict,
+    round_num: int = 1,
 ) -> Execution:
     """将一次真实执行落库，供 Web Console 和报告回溯。"""
+    result_with_round = {**(result or {}), "round": round_num}
     logger.info(
-        "进入 record_execution: incident=%s, operator=%s, status=%s, action=%s",
+        "进入 record_execution: incident=%s, operator=%s, status=%s, round=%s, action=%s",
         incident_id,
         operator,
         status,
+        round_num,
         action,
     )
     async with AsyncSessionLocal() as session:
@@ -169,11 +172,11 @@ async def record_execution(
             action=action,
             operator=operator,
             status=status,
-            result=result,
+            result=result_with_round,
             completed_at=datetime.now(timezone.utc),
         )
         saved = await create_execution(session, execution)
-    logger.info("执行记录已保存: incident=%s, execution_id=%s", incident_id, saved.id)
+    logger.info("执行记录已保存: incident=%s, execution_id=%s, round=%s", incident_id, saved.id, round_num)
     return saved
 
 
@@ -208,13 +211,18 @@ async def execute_approved_plan(state: dict) -> dict:
     runbook = state.get("runbook") or {}
     steps = runbook.get("steps") or []
     risk_assessment = state.get("risk_assessment") or {}
+    try:
+        round_num = max(1, int(state.get("retry_count") or 1))
+    except (TypeError, ValueError):
+        round_num = 1
     logger.info(
-        "进入 execute_approved_plan: incident=%s, operator=%s, runbook=%s, steps=%s, risk_allowed=%s",
+        "进入 execute_approved_plan: incident=%s, operator=%s, runbook=%s, steps=%s, risk_allowed=%s, round=%s",
         incident_id,
         operator,
         runbook.get("name", "-"),
         len(steps),
         risk_assessment.get("allowed"),
+        round_num,
     )
 
     if not risk_assessment.get("allowed", False):
@@ -262,7 +270,7 @@ async def execute_approved_plan(state: dict) -> dict:
         logger.info("准备执行 Runbook 步骤: incident=%s, command=%s", incident_id, command)
         result = await execute_kubectl(command)
         status = "success" if result.get("exit_code") == 0 else result.get("status", "failed")
-        await record_execution(incident_id, command, operator, status, result)
+        await record_execution(incident_id, command, operator, status, result, round_num=round_num)
         await write_audit(
             incident_id,
             operator,

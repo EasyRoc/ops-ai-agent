@@ -1,9 +1,11 @@
+from types import SimpleNamespace
 from unittest import IsolatedAsyncioTestCase, TestCase
 from unittest.mock import AsyncMock, patch
 
 from fastapi import BackgroundTasks
 
 from agent.api.v1.approvals import (
+    _load_execution_state,
     _update_feishu_card,
     approval_callback,
     build_approval_result_card,
@@ -20,6 +22,14 @@ class _JSONRequest:
 
     async def json(self):
         return self._body
+
+
+class _AsyncSessionContext:
+    async def __aenter__(self):
+        return object()
+
+    async def __aexit__(self, exc_type, exc, tb):
+        return False
 
 
 class FeishuApprovalHelpersTest(IsolatedAsyncioTestCase):
@@ -110,7 +120,7 @@ class ApprovalCallbackTest(IsolatedAsyncioTestCase):
         update_status.assert_awaited_once_with("INC-NEW-CARD", "approved")
         run_workflow.assert_awaited_once()
 
-    async def test_approve_ai_triggers_execution_workflow(self):
+    async def test_approve_ai_triggers_retry_workflow(self):
         background_tasks = BackgroundTasks()
 
         with (
@@ -118,6 +128,7 @@ class ApprovalCallbackTest(IsolatedAsyncioTestCase):
             patch("agent.api.v1.approvals._update_feishu_card", new=AsyncMock()),
             patch("agent.api.v1.approvals._write_approval_audit", new=AsyncMock()),
             patch("agent.api.v1.approvals.run_execution_workflow", new=AsyncMock()) as run_workflow,
+            patch("agent.api.v1.approvals.run_retry_workflow", new=AsyncMock()) as run_retry_workflow,
         ):
             response = await approval_callback(
                 _JSONRequest(
@@ -134,7 +145,8 @@ class ApprovalCallbackTest(IsolatedAsyncioTestCase):
                 await task()
 
         self.assertEqual(response["approval_status"], "ai_approved")
-        run_workflow.assert_awaited_once()
+        run_workflow.assert_not_awaited()
+        run_retry_workflow.assert_awaited_once()
 
     async def test_manual_fix_does_not_trigger_execution(self):
         background_tasks = BackgroundTasks()
@@ -162,7 +174,7 @@ class ApprovalCallbackTest(IsolatedAsyncioTestCase):
         self.assertEqual(response["approval_status"], "manual_executing")
         run_workflow.assert_not_awaited()
 
-    async def test_continue_retry_does_not_trigger_execution_in_phase_b(self):
+    async def test_continue_retry_triggers_retry_workflow_in_phase_c(self):
         background_tasks = BackgroundTasks()
 
         with (
@@ -170,6 +182,7 @@ class ApprovalCallbackTest(IsolatedAsyncioTestCase):
             patch("agent.api.v1.approvals._update_feishu_card", new=AsyncMock()),
             patch("agent.api.v1.approvals._write_approval_audit", new=AsyncMock()),
             patch("agent.api.v1.approvals.run_execution_workflow", new=AsyncMock()) as run_workflow,
+            patch("agent.api.v1.approvals.run_retry_workflow", new=AsyncMock()) as run_retry_workflow,
         ):
             response = await approval_callback(
                 _JSONRequest(
@@ -187,6 +200,7 @@ class ApprovalCallbackTest(IsolatedAsyncioTestCase):
 
         self.assertEqual(response["approval_status"], "retry_continue")
         run_workflow.assert_not_awaited()
+        run_retry_workflow.assert_awaited_once()
 
     async def test_update_feishu_card_replaces_buttons_with_approval_result(self):
         with patch("agent.channels.feishu.update_card", new=AsyncMock(return_value={"code": 0})) as update_card:
@@ -237,3 +251,59 @@ class CardActionParserTest(TestCase):
             extract_message_id({"event": {"context": {"open_message_id": "om_new"}}}),
             "om_new",
         )
+
+
+class LoadExecutionStateTest(IsolatedAsyncioTestCase):
+    async def test_load_execution_state_restores_ai_retry_metadata(self):
+        retry_plan = {
+            "name": "ai_retry",
+            "ai_generated": True,
+            "retry_reasoning": "扩容未恢复，改为重启异常 Pod",
+            "steps": [
+                {
+                    "risk_level": "中风险",
+                    "description": "重启异常 Pod",
+                    "command": "kubectl delete pod order-xyz -n demo",
+                }
+            ],
+            "verification": {"metric": "cpu", "operator": "<", "threshold": 70.0},
+            "confidence": 0.7,
+        }
+        incident = SimpleNamespace(
+            id="INC-RETRY-LOAD",
+            alert_name="HighCPUUsage",
+            service="order-service",
+            env="prod",
+            severity="P1",
+            alert_value="95",
+            root_cause="CPU 过高",
+            confidence=0.8,
+            evidence=["CPU 高"],
+            runbook_name="ai_fallback",
+            action_plan=[{"description": "扩容", "command": "kubectl scale deployment order-service -n demo --replicas=4"}],
+            risk_assessment={
+                "allowed": True,
+                "ai_generated": True,
+                "ai_reasoning": "初始 AI 分析",
+                "verification": {"metric": "cpu", "operator": "<", "threshold": 70.0},
+                "retry": {
+                    "count": 2,
+                    "history": [{"round": 1, "analysis": "扩容未恢复"}],
+                    "latest_plan": retry_plan,
+                },
+            },
+            approval_status="retry_continue",
+        )
+
+        with (
+            patch("agent.api.v1.approvals.AsyncSessionLocal", return_value=_AsyncSessionContext()),
+            patch("agent.api.v1.approvals.get_incident", new=AsyncMock(return_value=incident)),
+        ):
+            state = await _load_execution_state("INC-RETRY-LOAD", "ou_test")
+
+        self.assertEqual(state["retry_count"], 2)
+        self.assertEqual(state["retry_history"][0]["round"], 1)
+        self.assertEqual(state["runbook"]["name"], "ai_retry")
+        self.assertTrue(state["runbook"]["ai_generated"])
+        self.assertEqual(state["runbook"]["steps"][0]["command"], "kubectl delete pod order-xyz -n demo")
+        self.assertEqual(state["runbook"]["verification"]["metric"], "cpu")
