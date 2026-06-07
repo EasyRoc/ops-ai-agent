@@ -106,10 +106,13 @@ class Phase2WorkflowTest(IsolatedAsyncioTestCase):
             patch("agent.agents.fallback.generate_ai_action_plan", new=AsyncMock(return_value=ai_plan)) as fallback_mock,
             patch("agent.agents.rca._save_diagnosis", new=AsyncMock()),
             patch("agent.agents.rca._notify_diagnosis", new=AsyncMock()),
+            patch("agent.agents.audit.write_audit", new=AsyncMock()) as write_audit,
         ):
             result = await analyze_root_cause(state)
 
         fallback_mock.assert_awaited_once()
+        write_audit.assert_awaited_once()
+        self.assertEqual(write_audit.await_args.args[2], "ai_plan_generated")
         self.assertEqual(result["approval_status"], "pending")
         self.assertEqual(result["runbook"]["name"], "ai_fallback")
         self.assertTrue(result["runbook"]["ai_generated"])

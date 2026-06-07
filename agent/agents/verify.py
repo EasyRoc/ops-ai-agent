@@ -21,6 +21,9 @@ THRESHOLDS = {
 }
 
 
+SUPPORTED_DYNAMIC_METRICS = {"cpu", "memory", "error_rate", "rt_avg", "qps"}
+
+
 def _match_threshold(alert_name: str) -> dict:
     """根据告警名选择验证指标，默认按 CPU 告警处理。"""
     normalized = (alert_name or "").upper()
@@ -38,12 +41,62 @@ def _match_threshold(alert_name: str) -> dict:
     return THRESHOLDS["CPU"]
 
 
+def _resolve_verification(state: dict, alert_name: str) -> dict:
+    """解析本轮恢复验证条件。
+
+    优先使用 AI Runbook 给出的 verification 配置；如果 AI 输出不完整、
+    操作符不受支持，或指标名不在本地采集范围内，则回退到告警名映射的
+    默认阈值。当前恢复验证只支持“小于阈值即恢复”的判断。
+    """
+    runbook = (state or {}).get("runbook") or {}
+    verification = runbook.get("verification") or {}
+    if runbook.get("ai_generated") and verification:
+        metric = verification.get("metric")
+        operator = verification.get("operator", "<")
+        threshold = verification.get("threshold")
+        if operator != "<":
+            logger.warning(
+                "AI 验证条件操作符暂不支持，回退默认阈值: alert=%s, metric=%s, operator=%s",
+                alert_name,
+                metric,
+                operator,
+            )
+            return _match_threshold(alert_name)
+        if metric not in SUPPORTED_DYNAMIC_METRICS:
+            logger.warning(
+                "AI 验证指标不在采集范围内，回退默认阈值: alert=%s, metric=%s",
+                alert_name,
+                metric,
+            )
+            return _match_threshold(alert_name)
+        try:
+            max_value = float(threshold)
+        except (TypeError, ValueError):
+            logger.warning(
+                "AI 验证阈值无法解析，回退默认阈值: alert=%s, metric=%s, threshold=%s",
+                alert_name,
+                metric,
+                threshold,
+            )
+            return _match_threshold(alert_name)
+        logger.info(
+            "使用 AI 动态验证阈值: alert=%s, metric=%s, max=%s",
+            alert_name,
+            metric,
+            max_value,
+        )
+        return {"metric": metric, "max": max_value, "unit": ""}
+
+    return _match_threshold(alert_name)
+
+
 async def verify_recovery(
     incident_id: str,
     context: dict,
     alert_name: str,
     max_wait: int = 300,
     interval: int = 15,
+    threshold_override: dict | None = None,
 ) -> dict:
     """轮询 Prometheus 指标，判断执行后是否恢复。
 
@@ -51,7 +104,7 @@ async def verify_recovery(
     所以这里至少执行一次查询，避免测试和演示场景被 sleep 拖慢。
     """
     service = (context or {}).get("service") or "unknown"
-    threshold = _match_threshold(alert_name)
+    threshold = threshold_override or _match_threshold(alert_name)
     metric_name = threshold["metric"]
     max_value = float(threshold["max"])
     started = time.monotonic()
@@ -172,16 +225,24 @@ async def verify(state: dict) -> dict:
     alert = state.get("alert_parsed") or {}
     context = state.get("context") or {}
     alert_name = alert.get("alertname", "")
+    retry_count = int(state.get("retry_count") or 0)
+    threshold = _resolve_verification(state, alert_name)
+    max_wait = 450 if retry_count >= 3 else 300
     logger.info(
-        "进入 verify 节点: incident=%s, alert=%s, service=%s",
+        "进入 verify 节点: incident=%s, alert=%s, service=%s, retry_count=%s, metric=%s, max=%s",
         incident_id,
         alert_name,
         context.get("service") or alert.get("service", "-"),
+        retry_count,
+        threshold["metric"],
+        threshold["max"],
     )
     result = await verify_recovery(
         incident_id,
         {**context, "service": context.get("service") or alert.get("service", "unknown")},
         alert_name,
+        max_wait=max_wait,
+        threshold_override=threshold,
     )
     state["verification_result"] = result
     if result.get("recovered"):

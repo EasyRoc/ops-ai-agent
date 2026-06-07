@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from agent.channels.feishu import handle_card_action, verify_card_callback
 from agent.db.crud import AsyncSessionLocal, get_incident, get_session, update_incident
 from agent.workflows.alert_workflow import AlertState, build_execution_workflow
+from agent.workflows.retry_workflow import build_retry_workflow
 
 logger = logging.getLogger("ops-agent.api.approvals")
 router = APIRouter(prefix="/api/v1")
@@ -173,10 +174,12 @@ async def approval_callback(request: Request, background_tasks: BackgroundTasks)
         {"action": action, "callback_type": callback_type},
     )
 
-    # 审批通过后触发 Phase 3 执行工作流（execute → verify → report）。
-    # AI 兜底卡片的“AI 自动执行”复用同一个执行入口；重试类动作留给 Phase C 专用工作流处理。
-    if approval_status in {"approved", "ai_approved"}:
+    # 普通 Runbook 审批走 Phase 3；AI 兜底和继续重试都走 Phase C，
+    # 这样首次 AI 执行失败后也能自动进入“自省 → 重试卡片”闭环。
+    if approval_status == "approved":
         background_tasks.add_task(run_execution_workflow, incident_id, body)
+    elif approval_status in {"ai_approved", "retry_continue"}:
+        background_tasks.add_task(run_retry_workflow, incident_id, body)
 
     logger.info(
         "审批回调后台任务已入队: incident=%s, approval_status=%s, operator=%s",
@@ -235,6 +238,46 @@ async def _load_execution_state(incident_id: str, operator: str) -> AlertState |
         logger.warning("恢复执行工作流状态失败，工单不存在: incident=%s", incident_id)
         return None
 
+    risk_assessment = incident.risk_assessment or {}
+    retry_meta = risk_assessment.get("retry") or {}
+    retry_count = getattr(incident, "retry_count", None) or 0
+    retry_history = getattr(incident, "retry_history", None) or []
+    ai_generated = bool(getattr(incident, "ai_generated", False) or risk_assessment.get("ai_generated"))
+    ai_reasoning = getattr(incident, "ai_reasoning", None) or risk_assessment.get("ai_reasoning", "")
+
+    if not retry_history and retry_meta:
+        retry_count = retry_meta.get("count", 0)
+        retry_history = retry_meta.get("history") or []
+        logger.info(
+            "从 risk_assessment.retry 降级读取重试数据: incident=%s, retry_count=%s",
+            incident_id,
+            retry_count,
+        )
+
+    latest_retry_plan = retry_meta.get("latest_plan") or {}
+    runbook = {
+        "name": incident.runbook_name,
+        "steps": incident.action_plan or [],
+    }
+
+    # Phase D: AI 元数据优先从专用列恢复，旧 risk_assessment 仅作兼容兜底。
+    if ai_generated:
+        runbook.update(
+            {
+                "ai_generated": True,
+                "ai_reasoning": ai_reasoning,
+                "verification": risk_assessment.get("verification", {}),
+                "confidence": risk_assessment.get("ai_confidence", 0.5),
+            }
+        )
+    if latest_retry_plan and not getattr(incident, "retry_history", None):
+        runbook = {
+            **latest_retry_plan,
+            "ai_generated": latest_retry_plan.get("ai_generated", True),
+        }
+        if ai_reasoning and not runbook.get("ai_reasoning"):
+            runbook["ai_reasoning"] = ai_reasoning
+
     state: AlertState = {
         "alert_raw": {},
         "incident_id": incident.id,
@@ -255,25 +298,25 @@ async def _load_execution_state(incident_id: str, operator: str) -> AlertState |
             "confidence": incident.confidence or 0,
             "evidence": incident.evidence or [],
         },
-        "runbook": {
-            "name": incident.runbook_name,
-            "steps": incident.action_plan or [],
-        },
-        "risk_assessment": incident.risk_assessment or {},
+        "runbook": runbook,
+        "risk_assessment": risk_assessment,
         "approval_status": incident.approval_status,
         "execution_result": None,
         "verification_result": None,
+        "retry_count": retry_count,
+        "retry_history": retry_history,
         "report": None,
         "operator": operator,
         "error": None,
     }
     logger.info(
-        "执行工作流状态已恢复: incident=%s, service=%s, runbook=%s, steps=%s, risk_allowed=%s",
+        "执行工作流状态已恢复: incident=%s, service=%s, runbook=%s, steps=%s, risk_allowed=%s, retry_count=%s",
         incident.id,
         incident.service,
-        incident.runbook_name,
-        len(incident.action_plan or []),
-        (incident.risk_assessment or {}).get("allowed"),
+        runbook.get("name"),
+        len(runbook.get("steps") or []),
+        risk_assessment.get("allowed"),
+        retry_count,
     )
     return state
 
@@ -304,6 +347,59 @@ async def run_execution_workflow(incident_id: str, body: dict | None = None) -> 
     except Exception as exc:
         logger.error(
             "Phase 3 执行工作流失败: incident=%s, error=%s",
+            incident_id,
+            exc,
+            exc_info=True,
+        )
+        async with AsyncSessionLocal() as session:
+            await update_incident(
+                session,
+                incident_id,
+                status="escalated",
+                approval_status="escalated",
+            )
+        return {"status": "failed", "incident_id": incident_id, "error": str(exc)}
+
+
+async def run_retry_workflow(incident_id: str, body: dict | None = None) -> dict:
+    """启动 Phase C: retry_execute → retry_verify → retry_analyze。
+
+    首次点击“批准 AI 自动执行”和后续点击“继续 AI 执行”都会走这里。
+    """
+    operator = extract_operator(body or {})
+    logger.info(
+        "进入 run_retry_workflow: incident=%s, operator=%s",
+        incident_id,
+        operator,
+    )
+    state = await _load_execution_state(incident_id, operator)
+    if not state:
+        return {"status": "not_found", "incident_id": incident_id}
+
+    try:
+        action = parse_card_action(extract_card_action_value(body or {})).get("action")
+    except json.JSONDecodeError:
+        action = ""
+    # 后台任务理论上按加入顺序执行，但这里仍从回调 action 推导内存态，
+    # 避免数据库状态还没刷新时影响日志和后续节点判断。
+    if action == "approve_ai":
+        state["approval_status"] = "ai_approved"
+    elif action == "continue_retry":
+        state["approval_status"] = "retry_continue"
+    workflow = build_retry_workflow()
+    try:
+        result = await workflow.ainvoke(state)
+        logger.info(
+            "Phase C AI 重试工作流完成: incident=%s, execution=%s, verification=%s, retry_count=%s",
+            incident_id,
+            (result.get("execution_result") or {}).get("status"),
+            (result.get("verification_result") or {}).get("status"),
+            result.get("retry_count"),
+        )
+        return result
+    except Exception as exc:
+        logger.error(
+            "Phase C AI 重试工作流失败: incident=%s, error=%s",
             incident_id,
             exc,
             exc_info=True,

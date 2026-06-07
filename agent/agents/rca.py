@@ -125,6 +125,28 @@ async def analyze_root_cause(state: AlertState) -> AlertState:
         state["runbook"] = runbook
         state["risk_assessment"] = risk_assessment
         state["approval_status"] = "pending"
+        if runbook.get("ai_generated"):
+            try:
+                from agent.agents.audit import write_audit
+
+                await write_audit(
+                    incident_id,
+                    "system",
+                    "ai_plan_generated",
+                    {
+                        "confidence": runbook.get("confidence", 0),
+                        "steps_count": len(runbook.get("steps", [])),
+                        "ai_reasoning": (runbook.get("ai_reasoning") or "")[:200],
+                    },
+                )
+                logger.info("AI 兜底方案审计事件已写入: incident=%s", incident_id)
+            except Exception as exc:
+                logger.error(
+                    "AI 兜底方案审计事件写入失败: incident=%s, error=%s",
+                    incident_id,
+                    exc,
+                    exc_info=True,
+                )
         logger.info(
             "处置方案已生成: incident=%s, runbook=%s, steps=%s, risk=%s/%s",
             incident_id,

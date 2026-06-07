@@ -26,6 +26,8 @@ class Phase3APITest(IsolatedAsyncioTestCase):
                 "operator": "ou_test",
                 "status": "success",
                 "result": {"exit_code": 0},
+                "round": 2,
+                "ai_analysis": "扩容后进入验证",
                 "created_at": None,
                 "completed_at": None,
             },
@@ -35,3 +37,5 @@ class Phase3APITest(IsolatedAsyncioTestCase):
             response = await list_incident_executions_endpoint("INC-PHASE3", db=object())
 
         self.assertEqual(response["executions"][0]["status"], "success")
+        self.assertEqual(response["executions"][0]["round"], 2)
+        self.assertEqual(response["executions"][0]["ai_analysis"], "扩容后进入验证")

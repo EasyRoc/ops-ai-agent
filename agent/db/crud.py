@@ -43,6 +43,69 @@ async def ensure_phase3_schema() -> None:
     logger.info("Phase 3 schema ensured")
 
 
+async def ensure_phase4_schema() -> None:
+    """为 Phase D 可观测性能力补齐幂等 schema 变更。"""
+    statements = [
+        "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS retry_count INTEGER DEFAULT 0",
+        "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS retry_history JSONB",
+        "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS ai_generated BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE incidents ADD COLUMN IF NOT EXISTS ai_reasoning TEXT",
+        "ALTER TABLE executions ADD COLUMN IF NOT EXISTS round INTEGER DEFAULT 1",
+        "ALTER TABLE executions ADD COLUMN IF NOT EXISTS ai_analysis TEXT",
+        "CREATE INDEX IF NOT EXISTS idx_incidents_ai_generated ON incidents(ai_generated)",
+        "CREATE INDEX IF NOT EXISTS idx_executions_incident_round ON executions(incident_id, round)",
+    ]
+    async with engine.begin() as connection:
+        for statement in statements:
+            await connection.execute(text(statement))
+    logger.info("Phase 4 schema ensured")
+
+
+async def migrate_retry_data() -> int:
+    """把 Phase C 暂存在 risk_assessment.retry 的数据迁移到专用列。
+
+    迁移逻辑在启动时执行，必须保持幂等：只有专用列还没有重试轮次、
+    且工单已经标记为 AI 兜底时，才尝试从旧 JSON 结构中恢复。
+    返回迁移条数，便于测试和启动日志观察。
+    """
+    logger.info("开始迁移 risk_assessment.retry 到专用列")
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(
+            select(Incident).where(
+                Incident.retry_count == 0,
+                Incident.ai_generated == True,  # noqa: E712 - SQLAlchemy 需要生成 IS TRUE 条件
+            )
+        )
+        incidents = list(result.scalars().all())
+        migrated = 0
+        for incident in incidents:
+            risk = incident.risk_assessment or {}
+            retry_meta = risk.get("retry") or {}
+            if not retry_meta:
+                logger.info("跳过无旧重试数据的工单: incident=%s", incident.id)
+                continue
+
+            count = int(retry_meta.get("count") or 0)
+            history = retry_meta.get("history") or []
+            if count <= 0 and not history:
+                logger.info("跳过空重试数据的工单: incident=%s", incident.id)
+                continue
+
+            incident.retry_count = count
+            incident.retry_history = history
+            migrated += 1
+            logger.info(
+                "迁移重试数据: incident=%s, retry_count=%s, history_rounds=%s",
+                incident.id,
+                count,
+                len(history),
+            )
+
+        await session.commit()
+    logger.info("重试数据迁移完成: scanned=%s, migrated=%s", len(incidents), migrated)
+    return migrated
+
+
 async def create_incident(session: AsyncSession, incident: Incident) -> Incident:
     logger.info(f"创建工单: 服务={incident.service}, 告警={incident.alert_name}, 级别={incident.severity}")
     session.add(incident)

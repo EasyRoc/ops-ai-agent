@@ -1,6 +1,18 @@
 # AI 兜底策略 + 自主重试优化方案
 
-> 版本：v0.1 | 日期：2026-06-06 | 状态：草案
+> 版本：v1.0 | 日期：2026-06-06 | 状态：已完成
+
+## 实现状态
+
+截至 2026-06-07，本方案已按 Phase A-E 完成开发和测试：
+
+- Phase A：AI 兜底核心能力，未命中 Runbook 时生成 `ai_fallback` 方案。
+- Phase B：飞书 AI 兜底卡片、重试卡片和按钮回调。
+- Phase C：AI 执行失败后的自省重试循环，最多 5 轮。
+- Phase D：重试历史、AI 推理、执行轮次和审计时间线可观测。
+- Phase E：集成测试、E2E 脚本和飞书联调 Checklist。
+
+当前 README、告警诊断流程文档和 SVG 架构图已经同步到该实现状态。
 
 ## 一、问题分析
 
@@ -431,11 +443,11 @@ ALTER TABLE executions ADD COLUMN ai_analysis TEXT;  -- 该轮 LLM 的分析文�
 ```
 Feishu 用户点击 "AI 自动执行"
   → POST /api/v1/approvals/callback
-    → action = "approve_ai_fallback"
-    → run_fallback_execution_workflow(incident_id)
+    → action = "approve_ai"
+    → run_retry_workflow(incident_id)
       → _load_execution_state()  # 从 DB 恢复（含 ai_generated 标记）
-      → fallback_execution_workflow.ainvoke(state)
-        → execute → verify → [成功] report / [失败] retry_analyze
+      → retry_workflow.ainvoke(state)
+        → retry_execute → retry_verify → [成功] report / [失败] retry_analyze
 ```
 
 ### 4.2 飞书回调扩展
@@ -444,8 +456,8 @@ Feishu 用户点击 "AI 自动执行"
 
 | 按钮 | value.action | 触发逻辑 |
 |------|-------------|---------|
-| "AI 自动执行" | `approve_ai` | 生成 execution state，进入 fallback 工作流 |
-| "我自己来" | `manual_fix` | 发送纯文本命令列表到飞书群，工单状态置为 `manual_executing` |
+| "AI 自动执行" | `approve_ai` | 生成 execution state，进入 retry 工作流 |
+| "我自己来" | `manual_fix` | 工单状态置为 `manual_executing`，由人工按卡片方案处理 |
 | "拒绝" | `reject` | 复用现有 reject 逻辑 |
 | "继续 AI 执行" | `continue_retry` | 从 DB 加载 retry_history，进入 retry_analyze → execute → verify 循环 |
 | "转人工" | `stop_retry` | 终止重试循环，incident 置为 `escalated`，写 audit |
@@ -457,9 +469,9 @@ _ACTION_TO_STATUS = {
     "reject": "rejected",           # 现有
     "escalate": "escalated",        # 现有
     "approve_ai": "ai_approved",    # 新增
-    "manual_fix": "manual_approved",# 新增
+    "manual_fix": "manual_executing",# 新增
     "continue_retry": "retry_continue",  # 新增
-    "stop_retry": "retry_stop",     # 新增
+    "stop_retry": "escalated",      # 新增
 }
 ```
 
@@ -517,7 +529,7 @@ _ACTION_TO_STATUS = {
 
 | # | 任务 | 描述 | 产出 |
 |---|------|------|------|
-| E1 | 单元测试 | Fallback Agent + 重试循环的 pytest 用例 | 测试覆盖 |
+| E1 | 单元 / 集成测试 | Fallback Agent + 重试循环的 unittest 用例 | 测试覆盖 |
 | E2 | E2E 测试脚本 | 模拟未知告警→AI 兜底→执行→失败→重试→恢复 的完整链路 | E2E 覆盖 |
 | E3 | 飞书卡片联调 | 在真实飞书群中验证新卡片样式和按钮交互 | 交互验证 |
 
@@ -542,14 +554,14 @@ _ACTION_TO_STATUS = {
 | **新增** | `agent/agents/fallback.py` | Fallback Agent（方案生成 + 失败自省） |
 | **新增** | `agent/templates/cards/fallback_diagnosis_card.json` | AI 兜底诊断卡片 |
 | **新增** | `agent/templates/cards/retry_card.json` | 重试轮次卡片 |
-| **新增** | `agent/workflows/fallback_workflow.py` | AI 兜底执行 + 重试工作流 |
-| **新增** | `migrations/002_fallback_retry.sql` | DB schema 变更 |
+| **新增** | `agent/workflows/retry_workflow.py` | AI 兜底执行 + 重试工作流 |
+| **改造** | `agent/db/crud.py` | 启动时补齐 DB schema、适配新增字段，并迁移旧 retry 数据 |
 | **改造** | `agent/agents/rca.py` | `_build_action_plan()` 未命中时调用 Fallback Agent |
 | **改造** | `agent/agents/rca.py` | `_notify_diagnosis()` 区分普通/AI 卡片 |
 | **改造** | `agent/agents/verify.py` | 支持从 AI 方案动态提取验证阈值 |
 | **改造** | `agent/agents/executor.py` | 增加 `round` 参数，支持记录重试轮次 |
 | **改造** | `agent/api/v1/approvals.py` | 新增 action 类型路由 |
-| **改造** | `agent/workflows/alert_workflow.py` | 新增 `build_fallback_workflow()` |
+| **新增** | `agent/api/v1/audit.py` | 查询 Incident 审计时间线 |
+| **改造** | `agent/workflows/alert_workflow.py` | AlertState 补充 AI 和重试字段 |
 | **改造** | `agent/db/models.py` | Incident/Execution 新增字段 |
-| **改造** | `agent/db/crud.py` | 新增字段的 CRUD 适配 |
 | **改造** | `web/` | Incident 详情页新增重试时间线 |

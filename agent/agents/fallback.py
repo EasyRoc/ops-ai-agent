@@ -207,3 +207,208 @@ async def generate_ai_action_plan(context: dict, alert: dict, diagnosis: dict) -
         "verification": result.get("verification", {}),
         "confidence": confidence,
     }
+
+
+RETRY_SYSTEM_PROMPT = """你是一个 SRE 故障自愈专家。上一轮 AI 自动处置未能恢复服务，你需要分析失败原因并制定修正方案。
+
+## 分析原则
+
+1. 必须基于上一轮的失败证据：仔细阅读执行结果（stdout/stderr/exit_code）和验证结果（指标名、当前值、阈值）
+2. 本轮方案必须不同于前几轮：如果第 1 轮扩容无效，第 2 轮不要再次扩容；尝试不同策略（重启 Pod、回滚部署、调整资源 limit）
+3. 考虑间接原因：CPU 高可能是因为下游服务慢导致线程堆积，错误率高可能是因为连接池耗尽而非代码 bug
+4. 命令必须是 kubectl 命令，且以以下前缀之一开头：
+   - kubectl scale deployment
+   - kubectl delete pod
+   - kubectl rollout undo deployment
+   - kubectl set resources deployment
+   - kubectl get pods
+   - kubectl describe pod
+5. 每步标注风险等级：[低风险] / [中风险] / [高风险]
+6. 指定验证条件：执行后检查哪个指标 + 判断符（< 或 >）+ 阈值 + 文字说明
+
+## 输出格式
+
+严格输出以下 JSON，不要 markdown 包裹，不要额外解释：
+
+{
+  "retry_reasoning": "本轮修正逻辑（200字以内）",
+  "failure_analysis": "上一轮失败原因分析（100字以内）",
+  "steps": [
+    {"risk_level": "中风险", "description": "步骤描述", "command": "kubectl scale deployment xxx -n demo --replicas=4"}
+  ],
+  "verification": {
+    "metric": "cpu",
+    "operator": "<",
+    "threshold": 70.0,
+    "description": "CPU 使用率降至 70% 以下"
+  },
+  "confidence": 0.7
+}"""
+
+
+def _build_retry_prompt(
+    previous_plan: dict,
+    execution_result: dict,
+    verification_result: dict,
+    retry_count: int,
+    retry_history: list[dict],
+    context: dict,
+    alert: dict,
+) -> str:
+    """构建重试自省提示词，突出上一轮失败证据和历史尝试。"""
+    metrics = context.get("metrics", {})
+    pods = context.get("pods", {})
+
+    cpu = metrics.get("cpu", {})
+    memory = metrics.get("memory", {})
+    qps = metrics.get("qps", {})
+    rt = metrics.get("rt_avg", {})
+    error_rate = metrics.get("error_rate", {})
+
+    history_lines = []
+    for item in retry_history:
+        plan_summary = "; ".join(
+            step.get("description", "")[:40]
+            for step in item.get("plan_steps", [])
+            if isinstance(step, dict)
+        )
+        if not plan_summary:
+            plan_summary = "; ".join(str(step)[:40] for step in item.get("plan_steps", []))
+        exec_status = item.get("execution", {}).get("status", "?")
+        verify_status = "已恢复" if item.get("verification", {}).get("recovered") else "未恢复"
+        history_lines.append(
+            f"第 {item.get('round', '?')} 轮: {plan_summary or '无方案摘要'} → 执行{exec_status} → {verify_status}"
+        )
+    history_text = "\n".join(f"  - {line}" for line in history_lines) if history_lines else "  无"
+
+    exec_status = execution_result.get("status", "未知")
+    exec_stdout = (execution_result.get("stdout") or "")[:300]
+    exec_stderr = (execution_result.get("stderr") or "")[:500]
+
+    verify_metric = verification_result.get("metric", "?")
+    verify_current = verification_result.get("current", "?")
+    verify_threshold = verification_result.get("threshold", "?")
+    verify_recovered = "是" if verification_result.get("recovered") else "否"
+
+    previous_steps = previous_plan.get("steps") or []
+    previous_steps_text = "\n".join(
+        f"  {index}. [{step.get('risk_level', '?')}] {step.get('description', '')}\n"
+        f"     `{step.get('command', '')}`"
+        for index, step in enumerate(previous_steps, start=1)
+    ) or "  无上一轮方案"
+
+    logger.info(
+        "构建重试自省 Prompt: alert=%s, service=%s, retry_count=%s, history=%s",
+        alert.get("alertname", "未知"),
+        alert.get("service", "未知"),
+        retry_count,
+        len(retry_history),
+    )
+
+    return f"""请分析上一轮 AI 处置失败的原因，并制定第 {retry_count}/5 轮修正方案。
+
+=== 本轮重试信息 ===
+- 当前轮次: 第 {retry_count}/5 轮
+- 告警名称: {alert.get('alertname', '未知')}
+- 服务: {alert.get('service', '未知')}
+- 环境: {alert.get('env', 'prod')}
+- 级别: {alert.get('severity', 'P3')}
+
+=== 上一轮处置方案 ===
+{previous_steps_text}
+
+=== 上一轮执行结果 ===
+- 状态: {exec_status}
+- stdout: {exec_stdout or '无输出'}
+- stderr: {exec_stderr or '无错误'}
+- exit_code: {execution_result.get('exit_code', '未知')}
+
+=== 上一轮验证结果 ===
+- 指标: {verify_metric}
+- 当前值: {verify_current}
+- 阈值: {verify_threshold}
+- 是否恢复: {verify_recovered}
+
+=== 前几轮历史 ===
+{history_text}
+
+=== 当前系统状态（重新采集） ===
+- CPU使用率: {cpu.get('current', 0):.1f}%
+- 内存使用: {memory.get('current', 0):.0f} bytes
+- QPS: {qps.get('current', 0):.1f} req/s
+- 平均响应时间: {rt.get('current', 0):.4f}s
+- 错误率: {error_rate.get('current', 0):.4f}
+
+=== Pod 状态 ===
+- 总数: {pods.get('total', 0)}
+- 就绪: {pods.get('ready', 0)}
+- Pod 明细: {json.dumps(pods.get('pods', []), ensure_ascii=False) if pods.get('pods') else '无'}"""
+
+
+async def analyze_failure_and_retry(
+    incident_id: str,
+    previous_plan: dict,
+    execution_result: dict,
+    verification_result: dict,
+    retry_count: int,
+    retry_history: list[dict],
+    context: dict,
+    alert: dict,
+) -> dict | None:
+    """调用 LLM 分析上一轮失败原因并生成修正方案。"""
+    alert_name = alert.get("alertname", "未知")
+    logger.info(
+        "进入重试自省: incident=%s, alert=%s, retry_count=%s, history_rounds=%s",
+        incident_id,
+        alert_name,
+        retry_count,
+        len(retry_history or []),
+    )
+
+    try:
+        prompt = _build_retry_prompt(
+            previous_plan,
+            execution_result,
+            verification_result,
+            retry_count,
+            retry_history or [],
+            context,
+            alert,
+        )
+        logger.info("调用 LLM 重试自省: alert=%s, retry_count=%s, prompt_length=%s", alert_name, retry_count, len(prompt))
+        result = await chat_json(prompt, system=RETRY_SYSTEM_PROMPT)
+    except Exception as exc:
+        logger.error("重试自省 LLM 调用失败: alert=%s, error=%s", alert_name, exc, exc_info=True)
+        return None
+
+    errors = _validate_ai_output(result)
+    if errors:
+        logger.warning("重试自省 LLM 输出校验失败: alert=%s, retry_count=%s, errors=%s", alert_name, retry_count, errors)
+        return None
+
+    confidence = float(result.get("confidence", 0.5))
+    failure_analysis = result.get("failure_analysis", "")
+    steps = [
+        {
+            "risk_level": step["risk_level"],
+            "description": step["description"],
+            "command": step.get("command", ""),
+        }
+        for step in result["steps"]
+    ]
+
+    logger.info(
+        "重试自省完成: alert=%s, retry_count=%s, steps=%s, confidence=%s, analysis=%s",
+        alert_name,
+        retry_count,
+        len(steps),
+        confidence,
+        failure_analysis[:80],
+    )
+    return {
+        "retry_reasoning": result.get("retry_reasoning", ""),
+        "failure_analysis": failure_analysis,
+        "steps": steps,
+        "verification": result.get("verification", {}),
+        "confidence": confidence,
+    }
