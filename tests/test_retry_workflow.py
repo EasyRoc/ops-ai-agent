@@ -45,6 +45,34 @@ class RetryWorkflowRoutingTest(TestCase):
 
 
 class RetryWorkflowNodeTest(IsolatedAsyncioTestCase):
+    async def test_update_incident_retry_state_writes_dedicated_columns(self):
+        from agent.workflows.retry_workflow import update_incident_retry_state
+
+        runbook = {
+            "name": "ai_retry",
+            "steps": [{"description": "重启异常 Pod"}],
+            "retry_reasoning": "扩容无效，改为重启热点 Pod",
+        }
+        risk_assessment = {
+            "retry": {
+                "count": 3,
+                "history": [{"round": 1}, {"round": 2}, {"round": 3}],
+            }
+        }
+
+        with (
+            patch("agent.workflows.retry_workflow.AsyncSessionLocal") as session_cls,
+            patch("agent.workflows.retry_workflow.update_incident", new=AsyncMock()) as update_incident,
+        ):
+            session_cls.return_value.__aenter__.return_value = object()
+            await update_incident_retry_state("INC-RETRY", runbook, risk_assessment)
+
+        kwargs = update_incident.await_args.kwargs
+        self.assertEqual(kwargs["retry_count"], 3)
+        self.assertEqual(len(kwargs["retry_history"]), 3)
+        self.assertTrue(kwargs["ai_generated"])
+        self.assertEqual(kwargs["ai_reasoning"], "扩容无效，改为重启热点 Pod")
+
     async def test_retry_execute_records_current_retry_round(self):
         from agent.workflows.retry_workflow import retry_execute
 

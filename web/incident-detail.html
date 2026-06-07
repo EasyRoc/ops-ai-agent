@@ -66,6 +66,53 @@
     .reject { background: #dc2626; }
     .escalate { background: #4b5563; }
     li { margin-bottom: 10px; }
+    .timeline {
+      border-left: 3px solid #e5e7eb;
+      padding-left: 20px;
+      margin: 12px 0;
+    }
+    .timeline-entry {
+      position: relative;
+      margin-bottom: 18px;
+      padding: 14px 16px;
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+    }
+    .timeline-entry::before {
+      content: "";
+      position: absolute;
+      left: -28px;
+      top: 18px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #2563eb;
+      border: 2px solid white;
+    }
+    .timeline-entry.failed::before { background: #dc2626; }
+    .timeline-entry.recovered::before { background: #059669; }
+    .timeline-entry.analyzing::before { background: #d97706; }
+    .retry-round {
+      font-weight: 800;
+      font-size: 15px;
+      margin-bottom: 8px;
+      color: #111827;
+    }
+    .retry-detail {
+      color: #4b5563;
+      font-size: 13px;
+      line-height: 1.7;
+    }
+    .ai-badge {
+      display: inline-block;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: #fef3c7;
+      color: #92400e;
+      font-size: 12px;
+      font-weight: 800;
+    }
   </style>
 </head>
 <body>
@@ -118,6 +165,18 @@
         <p class="muted">恢复验证通过后自动生成 Markdown 报告，便于复盘和沉淀历史故障。</p>
         <div id="reportPreview">正在加载...</div>
       </div>
+    </section>
+
+    <section class="card" id="retryTimelineSection" hidden>
+      <h3>AI 重试时间线</h3>
+      <p class="muted">每次 AI 重试的分析、执行、验证结果按时间排列。</p>
+      <div id="retryTimeline"></div>
+    </section>
+
+    <section class="card" id="auditTimelineSection" hidden>
+      <h3>审计日志</h3>
+      <p class="muted">完整的事件审计链路，按时间正序展示。</p>
+      <div id="auditTimeline"></div>
     </section>
   </main>
   <script>
@@ -178,6 +237,8 @@
           ${step.command ? `<pre>${step.command}</pre>` : ""}
         </li>
       `).join("") || "<li>暂无处置方案</li>";
+      await loadRetryTimeline();
+      await loadAuditTimeline();
     }
 
     async function loadExecutions() {
@@ -237,6 +298,104 @@
       document.getElementById("approvalResult").textContent = `审批接口返回：${data.status}`;
       if (data.approval_status) {
         setApproval(data.approval_status);
+      }
+    }
+
+    function planStepsText(planSteps) {
+      if (!planSteps || planSteps.length === 0) return "无";
+      return planSteps.map((step) => {
+        if (typeof step === "string") return step;
+        return step.description || step.command || JSON.stringify(step);
+      }).join("；");
+    }
+
+    async function loadRetryTimeline() {
+      const section = document.getElementById("retryTimelineSection");
+      const container = document.getElementById("retryTimeline");
+      if (!currentIncident) return;
+
+      const retryHistory = currentIncident.retry_history || [];
+      const aiGenerated = Boolean(currentIncident.ai_generated);
+      if (!aiGenerated && retryHistory.length === 0) {
+        section.hidden = true;
+        return;
+      }
+
+      section.hidden = false;
+      let html = "";
+      if (aiGenerated) {
+        html += `<p><span class="ai-badge">AI 兜底方案</span> 推理：${(currentIncident.ai_reasoning || "无").slice(0, 180)}</p>`;
+      }
+      if (retryHistory.length === 0) {
+        html += "<p class='muted'>无重试记录（AI 方案首轮即恢复或尚未触发执行）。</p>";
+        container.innerHTML = html;
+        return;
+      }
+
+      html += '<div class="timeline">';
+      retryHistory.forEach((entry) => {
+        const execution = entry.execution || {};
+        const verification = entry.verification || {};
+        const recovered = Boolean(verification.recovered);
+        const execOk = execution.status === "success";
+        let cls = "analyzing";
+        if (recovered) cls = "recovered";
+        else if (execution.status && !execOk) cls = "failed";
+        html += `
+          <div class="timeline-entry ${cls}">
+            <div class="retry-round">第 ${entry.round || "?"} 轮重试 — ${entry.timestamp ? new Date(entry.timestamp).toLocaleString() : "未知时间"}</div>
+            <div class="retry-detail">
+              <div><strong>方案：</strong>${planStepsText(entry.plan_steps)}</div>
+              <div><strong>执行：</strong>${execution.status || "未执行"}${execution.stderr ? " — " + execution.stderr.slice(0, 120) : ""}</div>
+              <div><strong>验证：</strong>${recovered ? "已恢复" : "未恢复"} (当前 ${verification.current ?? "?"} / 阈值 ${verification.threshold ?? "?"})</div>
+              ${entry.analysis ? `<div><strong>分析：</strong>${entry.analysis}</div>` : ""}
+            </div>
+          </div>
+        `;
+      });
+      html += "</div>";
+      container.innerHTML = html;
+    }
+
+    async function loadAuditTimeline() {
+      const section = document.getElementById("auditTimelineSection");
+      const container = document.getElementById("auditTimeline");
+      if (!incidentId) return;
+
+      try {
+        const response = await fetch(`/api/v1/incidents/${encodeURIComponent(incidentId)}/audit?limit=100`);
+        if (!response.ok) {
+          section.hidden = true;
+          return;
+        }
+        const data = await response.json();
+        const logs = data.audit_logs || [];
+        if (logs.length === 0) {
+          section.hidden = true;
+          return;
+        }
+        const actionLabels = {
+          ai_plan_generated: "AI 方案生成",
+          ai_execution_approved: "用户批准 AI 执行",
+          manual_execution_chosen: "用户选择人工处理",
+          retry_analysis: "AI 重试自省",
+          retry_plan_generated: "AI 重试方案生成",
+          retry_executed: "重试执行",
+          retry_exhausted: "重试次数耗尽",
+          ai_command_blocked: "AI 命令被拦截",
+          retry_command_executed: "重试命令执行",
+          retry_execution_blocked: "重试执行被阻止",
+          retry_escalated: "重试升级人工"
+        };
+        section.hidden = false;
+        container.innerHTML = '<div class="timeline">' + logs.map((log) => `
+          <div class="timeline-entry">
+            <div class="retry-round">${actionLabels[log.action] || log.action} <span class="muted" style="font-weight:400;font-size:12px;">— ${log.created_at ? new Date(log.created_at).toLocaleString() : ""}</span></div>
+            <div class="retry-detail">操作人：${log.actor || "system"} | ${JSON.stringify(log.detail || {}).slice(0, 240)}</div>
+          </div>
+        `).join("") + "</div>";
+      } catch (err) {
+        section.hidden = true;
       }
     }
 

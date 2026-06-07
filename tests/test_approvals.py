@@ -292,6 +292,10 @@ class LoadExecutionStateTest(IsolatedAsyncioTestCase):
                     "latest_plan": retry_plan,
                 },
             },
+            retry_count=0,
+            retry_history=[],
+            ai_generated=True,
+            ai_reasoning="初始 AI 分析",
             approval_status="retry_continue",
         )
 
@@ -307,3 +311,39 @@ class LoadExecutionStateTest(IsolatedAsyncioTestCase):
         self.assertTrue(state["runbook"]["ai_generated"])
         self.assertEqual(state["runbook"]["steps"][0]["command"], "kubectl delete pod order-xyz -n demo")
         self.assertEqual(state["runbook"]["verification"]["metric"], "cpu")
+
+    async def test_load_execution_state_prefers_dedicated_retry_columns(self):
+        incident = SimpleNamespace(
+            id="INC-DEDICATED",
+            alert_name="HighCPUUsage",
+            service="order-service",
+            env="prod",
+            severity="P1",
+            alert_value="95",
+            root_cause="CPU 过高",
+            confidence=0.8,
+            evidence=[],
+            runbook_name="ai_fallback",
+            action_plan=[{"description": "扩容", "command": "kubectl scale deployment order-service -n demo --replicas=4"}],
+            risk_assessment={
+                "allowed": True,
+                "ai_generated": True,
+                "retry": {"count": 1, "history": [{"round": 1, "analysis": "旧数据"}]},
+                "verification": {"metric": "cpu", "operator": "<", "threshold": 70.0},
+            },
+            retry_count=4,
+            retry_history=[{"round": 4, "analysis": "专用列数据"}],
+            ai_generated=True,
+            ai_reasoning="专用列 AI 推理",
+            approval_status="retry_continue",
+        )
+
+        with (
+            patch("agent.api.v1.approvals.AsyncSessionLocal", return_value=_AsyncSessionContext()),
+            patch("agent.api.v1.approvals.get_incident", new=AsyncMock(return_value=incident)),
+        ):
+            state = await _load_execution_state("INC-DEDICATED", "ou_test")
+
+        self.assertEqual(state["retry_count"], 4)
+        self.assertEqual(state["retry_history"][0]["analysis"], "专用列数据")
+        self.assertEqual(state["runbook"]["ai_reasoning"], "专用列 AI 推理")

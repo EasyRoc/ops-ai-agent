@@ -89,6 +89,39 @@
     .pending_approval { background: #fef3c7; color: #92400e; }
     .approved { background: #d1fae5; color: #065f46; }
     .rejected { background: #fee2e2; color: #991b1b; }
+    .ai-badge {
+      display: inline-block;
+      padding: 4px 9px;
+      border-radius: 999px;
+      background: #fef3c7;
+      color: #92400e;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 14px;
+      margin-bottom: 18px;
+    }
+    .metric-card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, 0.05);
+      text-align: center;
+    }
+    .metric-card .value {
+      font-size: 30px;
+      font-weight: 850;
+      color: #111827;
+    }
+    .metric-card .label {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 13px;
+    }
     .empty, .error {
       padding: 28px;
       color: var(--muted);
@@ -110,6 +143,24 @@
       <button onclick="loadIncidents()">刷新事件</button>
       <span id="summary">正在加载...</span>
     </div>
+    <section class="stats" id="dashboard">
+      <div class="metric-card">
+        <div class="value" id="statTotal">-</div>
+        <div class="label">总事件</div>
+      </div>
+      <div class="metric-card">
+        <div class="value" id="statAiRatio">-</div>
+        <div class="label">AI 兜底占比</div>
+      </div>
+      <div class="metric-card">
+        <div class="value" id="statAiSuccess">-</div>
+        <div class="label">AI 方案成功率</div>
+      </div>
+      <div class="metric-card">
+        <div class="value" id="statAvgRetry">-</div>
+        <div class="label">平均重试轮数</div>
+      </div>
+    </section>
     <section class="card">
       <table>
         <thead>
@@ -119,6 +170,7 @@
             <th>级别</th>
             <th>状态</th>
             <th>Runbook</th>
+            <th>AI</th>
             <th>风险</th>
             <th>创建时间</th>
           </tr>
@@ -147,9 +199,11 @@
         const response = await fetch("/api/v1/incidents?limit=50");
         if (!response.ok) throw new Error(`接口返回 ${response.status}`);
         const data = await response.json();
+        const incidents = data.incidents || [];
         summary.textContent = `共 ${data.total || 0} 个事件`;
-        empty.hidden = (data.incidents || []).length > 0;
-        rows.innerHTML = (data.incidents || []).map((item) => {
+        empty.hidden = incidents.length > 0;
+        renderDashboard(incidents);
+        rows.innerHTML = incidents.map((item) => {
           const risk = item.risk_assessment ? `${item.risk_assessment.level || "-"} / ${item.risk_assessment.score || 0}分` : "-";
           const created = item.created_at ? new Date(item.created_at).toLocaleString() : "-";
           return `
@@ -159,6 +213,7 @@
               <td>${item.severity || "-"}</td>
               <td>${badge(item.approval_status || item.status, item.approval_status || item.status)}</td>
               <td>${item.runbook_name || "未匹配"}</td>
+              <td>${item.ai_generated ? '<span class="ai-badge">AI</span>' : "-"}</td>
               <td>${risk}</td>
               <td>${created}</td>
             </tr>
@@ -169,6 +224,25 @@
         error.hidden = false;
         error.textContent = `无法读取 /api/v1/incidents：${err.message}`;
       }
+    }
+
+    function renderDashboard(incidents) {
+      const total = incidents.length;
+      const aiIncidents = incidents.filter((item) => item.ai_generated);
+      const aiRatio = total > 0 ? Math.round(aiIncidents.length / total * 100) : 0;
+      const aiResolved = aiIncidents.filter((item) =>
+        item.status === "resolved" || item.status === "verified" || item.approval_status === "verified"
+      );
+      const aiSuccess = aiIncidents.length > 0 ? Math.round(aiResolved.length / aiIncidents.length * 100) : 0;
+      const retryCounts = incidents.map((item) => item.retry_count || 0).filter((count) => count > 0);
+      const avgRetry = retryCounts.length > 0
+        ? (retryCounts.reduce((sum, count) => sum + count, 0) / retryCounts.length).toFixed(1)
+        : "0";
+
+      document.getElementById("statTotal").textContent = total;
+      document.getElementById("statAiRatio").textContent = `${aiRatio}%`;
+      document.getElementById("statAiSuccess").textContent = `${aiSuccess}%`;
+      document.getElementById("statAvgRetry").textContent = avgRetry;
     }
 
     loadIncidents();
