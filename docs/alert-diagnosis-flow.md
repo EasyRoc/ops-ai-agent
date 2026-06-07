@@ -1,13 +1,13 @@
 # 告警诊断与处置完整流程
 
-> 本文说明当前项目中，服务产生告警后，从“被监控系统感知”到“Agent 诊断、审批、执行、验证、报告”的完整链路。
+> 本文说明当前项目中，服务产生告警后，从“被监控系统感知”到“Agent 诊断、Runbook / AI 兜底、飞书确认、自动执行、失败重试、恢复验证、报告沉淀”的完整链路。
 >
 > 重点回答四个问题：
 >
 > - 服务异常后，谁最先感知？
 > - 感知之后，哪些组件负责把告警送到 Agent？
 > - Agent 收到告警后如何收集信息和排查？
-> - 飞书审批通过后，自动执行、验证和报告如何继续推进？
+> - 飞书确认后，自动执行、失败重试、验证和报告如何继续推进？
 
 ## 1. 一句话概览
 
@@ -19,16 +19,18 @@ Demo 服务暴露指标
   → Alertmanager 接收 firing 告警并 Webhook 调用 Agent
   → Agent 创建 Incident、采集 Prometheus/Loki/K8s/CMDB 上下文
   → Agent 调用 LLM 或规则兜底做根因分析
-  → Agent 匹配 Runbook、评估风险、发送飞书审批卡片
-  → 人在飞书点击批准
-  → Agent 执行白名单命令、验证恢复、生成故障报告
+  → Agent 优先匹配 Runbook；未命中时调用 AI 兜底生成处置方案
+  → Agent 评估风险、发送飞书确认卡片
+  → 人在飞书点击批准 / AI 自动执行 / 我自己来 / 拒绝 / 转人工
+  → Agent 执行白名单命令、验证恢复；未恢复时进入 AI 自省重试
+  → 恢复后生成故障报告，失败或超限时升级人工
 ```
 
 需要注意：**业务服务不会主动调用 Agent**。业务服务只暴露指标和健康检查；真正发现告警的是 Prometheus，真正调用 Agent 的是 Alertmanager。
 
 ### 1.1 适用范围
 
-这份文档描述的是当前项目的 **通用告警处理主链路**。CPU 告警只是文档中展开最细的样例，因为它覆盖了指标异常、Runbook、风险评估、飞书审批、自动执行和恢复验证的完整路径。
+这份文档描述的是当前项目的 **通用告警处理主链路**。CPU 告警只是文档中展开最细的 Runbook 样例；未知告警会走 AI 兜底分支，覆盖 `2026-06-06-ai-fallback-strategy-design.md` 已完成的 AI 方案生成、飞书确认、失败自省、重试循环和审计可观测能力。
 
 对当前项目来说，所有接入 `/api/v1/alerts` 的告警都会经过同一条主链路：
 
@@ -39,17 +41,18 @@ Alertmanager Webhook
   → PostgreSQL Incident
   → Prometheus / Loki / Kubernetes / CMDB 上下文采集
   → RCA 诊断
-  → Runbook + Risk
-  → 飞书审批
-  → 审批后执行 / 验证 / 报告
+  → Runbook 命中：Runbook + Risk
+  → Runbook 未命中：AI Fallback + Risk
+  → 飞书确认
+  → 确认后执行 / 验证 / AI 重试 / 报告 / 转人工
 ```
 
 不同告警类型的差异主要在四个地方：
 
 - Prometheus 告警规则不同。
-- 匹配的 Runbook 不同。
+- 匹配的 Runbook 不同；未命中 Runbook 时进入 AI 兜底。
 - 风险评分可能不同。
-- 恢复验证指标和阈值不同。
+- 恢复验证指标和阈值不同；AI 兜底方案可以携带自己的验证条件。
 
 当前代码层面的支持情况：
 
@@ -59,6 +62,7 @@ Alertmanager Webhook
 | 错误率高 | `HighErrorRate` | `error_rate.md` | 错误率 `< 2%` | Alertmanager 默认已路由到 Agent |
 | 延迟高 | `HighLatency` / `P99` / `RT` | `latency_high.md` | 平均 RT `< 1s` | Runbook 和验证逻辑已支持，默认告警路由需按需补充 |
 | OOM / 内存 | `OOMKilled` / `OOM` / `Memory` | `oom.md` | memory 阈值 | Runbook 已支持；当前内存验证指标仍偏演示化，后续可细化为容器内存使用率 |
+| 未知告警 | `DiskPressure` / `ThreadPoolExhausted` 等 | `ai_fallback` | AI 方案内 `verification` | 已支持：LLM 生成方案，飞书确认后执行，失败可重试 |
 
 ## 2. 核心组件职责
 
@@ -79,12 +83,15 @@ Alertmanager Webhook
 | CMDB Tool | 查询负责人、团队、依赖、飞书群 | `agent/tools/cmdb.py` |
 | RCA Agent | 调用 LLM 或规则兜底生成根因、置信度、证据 | `agent/agents/rca.py` |
 | Runbook Agent | 根据告警名匹配处置模板，并渲染命令 | `agent/agents/runbook.py` |
+| Fallback Agent | 未命中 Runbook 时生成 AI 兜底方案；执行失败后自省并生成修正方案 | `agent/agents/fallback.py` |
 | Risk Agent | 根据命令、服务、环境、告警级别评估风险 | `agent/agents/risk.py` |
-| Feishu Channel | 发送告警卡片、诊断审批卡片，更新审批结果卡片 | `agent/channels/feishu.py` |
-| Approval API | 接收飞书按钮回调，更新审批状态，触发执行工作流 | `agent/api/v1/approvals.py` |
+| Feishu Channel | 发送告警卡片、诊断审批卡片、AI 兜底卡片、重试卡片，更新审批结果卡片 | `agent/channels/feishu.py` |
+| Approval API | 接收飞书按钮回调，更新审批状态，触发执行或 AI 重试工作流 | `agent/api/v1/approvals.py` |
 | Executor | 执行白名单内的 kubectl 变更命令 | `agent/agents/executor.py` |
-| Verify | 执行后轮询 Prometheus 判断是否恢复 | `agent/agents/verify.py` |
+| Retry Workflow | AI 方案执行后未恢复时，编排执行、验证、自省、发重试卡片、超限升级 | `agent/workflows/retry_workflow.py` |
+| Verify | 执行后轮询 Prometheus 判断是否恢复，支持 AI 方案动态验证阈值 | `agent/agents/verify.py` |
 | Report | 生成 Markdown 故障报告并沉淀故障模式 | `agent/agents/report.py` |
+| Audit API | 查询某个 Incident 的审批、执行、重试和报告审计时间线 | `agent/api/v1/audit.py` |
 
 ## 3. 完整时序图
 
@@ -100,6 +107,7 @@ sequenceDiagram
     participant DB as PostgreSQL
     participant Tools as Prom/Loki/K8s/CMDB Tools
     participant LLM as DeepSeek 或规则兜底
+    participant Fallback as Fallback Agent
     participant FS as 飞书群
     participant User as 审批人
     participant K8s as Kubernetes
@@ -117,18 +125,40 @@ sequenceDiagram
     Tools-->>WF: 返回上下文 context
     WF->>LLM: 生成根因、证据、置信度
     LLM-->>WF: 返回诊断结果
-    WF->>WF: 匹配 Runbook 并评估风险
+    WF->>WF: 尝试匹配 Runbook
+    alt 命中 Runbook
+        WF->>WF: 渲染 Runbook 并评估风险
+        WF->>FS: 发送诊断审批卡片
+        User->>FS: 点击批准执行 / 拒绝 / 转人工
+    else 未命中 Runbook
+        WF->>Fallback: 调用 LLM 生成 AI 兜底方案
+        Fallback-->>WF: 返回 ai_fallback、验证条件和推理过程
+        WF->>WF: 校验白名单并评估风险
+        WF->>FS: 发送 AI 兜底确认卡片
+        User->>FS: 点击 AI 自动执行 / 我自己来 / 拒绝
+    end
     WF->>DB: 更新 Incident 为 pending_approval
-    WF->>FS: 发送诊断与审批卡片
-    User->>FS: 点击批准执行
     FS->>API: POST /api/v1/approvals/callback
-    API->>DB: 更新 approval_status=approved
-    API->>WF: 启动 execution workflow
+    API->>DB: 更新 approval_status 并写 audit
+    API->>FS: 替换原卡片，移除按钮
+    alt 普通 Runbook approved
+        API->>WF: 启动 execution workflow
+    else AI approve_ai / continue_retry
+        API->>WF: 启动 retry workflow
+    end
     WF->>K8s: 执行白名单 kubectl 命令
     WF->>DB: 写 execution 和 audit
     WF->>Prom: 轮询恢复指标
     Prom-->>WF: 返回恢复指标
-    WF->>DB: 生成报告、关闭或升级 Incident
+    alt 已恢复
+        WF->>DB: 生成报告并关闭 Incident
+    else 未恢复且 AI 重试未超限
+        WF->>Tools: 重新采集上下文
+        WF->>Fallback: 自省失败原因并生成修正方案
+        WF->>FS: 发送第 N 轮重试卡片
+    else 未恢复且超限 / 风险阻断
+        WF->>DB: 升级人工并写 audit
+    end
 ```
 
 ## 4. 第一段：服务如何产生可观测告警
@@ -315,9 +345,20 @@ parse_alert
 |------|------|
 | `parse_alert` | 解析告警、去重、创建 Incident、发送初始告警卡片 |
 | `collect_context` | 收集 Prometheus、Loki、K8s、CMDB 上下文 |
-| `diagnose` | RCA 根因分析、Runbook 匹配、风险评估、保存诊断、发送审批卡片 |
+| `diagnose` | RCA 根因分析、Runbook 匹配或 AI 兜底、风险评估、保存诊断、发送确认卡片 |
 
 如果在 `parse_alert` 阶段发现是重复告警，工作流会直接结束，不再重复采集、诊断和发飞书诊断卡片。
+
+`diagnose` 节点内部会出现两条方案生成分支：
+
+```text
+RCA 诊断结果
+  → 尝试 load_runbook(alert_name)
+    → 命中：渲染 Runbook 步骤 → Risk 评估 → 飞书普通审批卡片
+    → 未命中：调用 Fallback Agent → AI 方案校验 → Risk 评估 → 飞书 AI 兜底卡片
+```
+
+这里的 AI 兜底并不会绕过人。它只是把“没有预置 Runbook”的告警也转成可确认、可执行、可验证的结构化方案。
 
 ## 9. 第六段：parse_alert 如何创建 Incident 和去重
 
@@ -562,11 +603,11 @@ LLM 被要求输出严格 JSON：
 | CPU 告警 + Pod 不健康 + QPS 低 | 倾向判断为单实例异常或代码死循环 |
 | 其他情况 | 输出低置信度结论，建议人工确认 |
 
-当前规则兜底对 CPU 场景最完整；其他告警类型也会得到低置信度兜底结果，并继续完成 Runbook、风险评估和审批流程。所以即使没有配置 DeepSeek，Agent 也能继续完成基本诊断流程。
+当前规则兜底对 CPU 场景最完整；其他告警类型也会得到低置信度兜底结果，并继续尝试 Runbook、风险评估和审批流程。所以即使没有配置 DeepSeek，Agent 也能继续完成已有 Runbook 的基本诊断流程。需要注意：AI 兜底方案和失败自省重试依赖 LLM，未配置可用 LLM 时无法生成高质量 `ai_fallback` / `ai_retry` 方案。
 
-## 12. 第九段：Runbook 如何生成处置方案
+## 12. 第九段：Runbook / AI 兜底如何生成处置方案
 
-RCA 完成后，Agent 会根据告警名称匹配 Runbook。
+RCA 完成后，Agent 会先根据告警名称匹配 Runbook。
 
 当前匹配关系：
 
@@ -612,6 +653,57 @@ kubectl scale deployment order-service -n demo --replicas=4
 
 当前项目为了避免本地 Kind 环境被连续 E2E 扩容压爆，Demo 扩容建议最多收敛到 4 副本。
 
+### 12.1 未命中 Runbook 时如何 AI 兜底
+
+如果 `load_runbook()` 返回 `None`，Agent 不再让工单悬空，而是调用：
+
+```text
+agent/agents/fallback.py::generate_ai_action_plan
+```
+
+Fallback Agent 会把 RCA 结果、指标、日志、Pod 状态和 CMDB 信息交给 LLM，要求它输出严格 JSON：
+
+```json
+{
+  "reasoning": "为什么这样处理",
+  "steps": [
+    {
+      "risk_level": "中风险",
+      "description": "扩容 order-service 分摊负载",
+      "command": "kubectl scale deployment order-service -n demo --replicas=4"
+    }
+  ],
+  "verification": {
+    "metric": "cpu",
+    "operator": "<",
+    "threshold": 70.0,
+    "description": "CPU 使用率降至 70% 以下"
+  },
+  "confidence": 0.75
+}
+```
+
+LLM 输出会先经过结构化校验：
+
+- `steps` 必须是非空列表。
+- 每一步必须包含风险等级、说明和命令。
+- 命令必须以白名单前缀开头。
+- 验证指标只能是 `cpu`、`memory`、`qps`、`rt_avg`、`error_rate`。
+- 验证操作符只能是 `<` 或 `>`。
+
+校验通过后，方案会被标记为：
+
+```json
+{
+  "name": "ai_fallback",
+  "ai_generated": true,
+  "ai_reasoning": "LLM 推理过程",
+  "verification": {}
+}
+```
+
+随后继续进入 Risk Agent。AI 高风险方案会自动收紧执行权限；用户即使看到方案，也需要在飞书里明确确认。
+
 ## 13. 第十段：风险评估如何决定是否允许自动执行
 
 Risk Agent 会综合这些因素：
@@ -644,17 +736,22 @@ Risk Agent 会综合这些因素：
 | `root_cause` | 根因描述 |
 | `confidence` | 置信度 |
 | `evidence` | 证据列表 |
-| `runbook_name` | 匹配到的 Runbook |
+| `runbook_name` | 匹配到的 Runbook；AI 兜底时为 `ai_fallback` 或 `ai_retry` |
 | `action_plan` | 渲染后的处置步骤 |
 | `risk_assessment` | 风险评估 |
 | `status` | `pending_approval` |
 | `approval_status` | `pending` |
+| `ai_generated` | 是否为 AI 生成方案 |
+| `ai_reasoning` | AI 兜底或重试自省的推理摘要 |
+| `retry_count` | 当前 AI 重试轮次 |
+| `retry_history` | 每轮执行、验证和失败分析摘要 |
 
-随后 Agent 会发送第二张飞书卡片：
+随后 Agent 会发送第二张飞书卡片。卡片类型取决于方案来源：
 
-```text
-诊断与审批卡片
-```
+| 方案来源 | 飞书卡片 | 主要按钮 |
+|----------|----------|----------|
+| Runbook 命中 | 诊断审批卡片 | `批准执行` / `拒绝` / `转人工` |
+| AI 兜底 | AI 自主诊断卡片 | `AI 自动执行` / `我自己来` / `拒绝` |
 
 这张卡片包含：
 
@@ -663,11 +760,10 @@ Risk Agent 会综合这些因素：
 - 风险等级
 - 证据
 - 置信度
-- 「批准执行」
-- 「拒绝」
-- 「转人工」
+- 普通 Runbook：风险等级、Runbook 方案和批准按钮。
+- AI 兜底：AI 推理过程、验证条件、置信度和“AI 自动执行 / 我自己来”按钮。
 
-这一步如果发送失败，数据库中的诊断结果仍然存在，只是飞书群看不到诊断审批卡片。
+这一步如果发送失败，数据库中的诊断结果仍然存在，只是飞书群看不到诊断或 AI 兜底确认卡片。
 
 ## 15. 第十二段：飞书按钮如何回调 Agent
 
@@ -681,7 +777,7 @@ POST /api/v1/approvals/callback
 
 ```json
 {
-  "action": "approve",
+  "action": "approve_ai",
   "incident_id": "INC-xxxx"
 }
 ```
@@ -695,17 +791,29 @@ Agent 收到后会做几件事：
 | action | approval_status |
 |--------|-----------------|
 | `approve` | `approved` |
+| `approve_ai` | `ai_approved` |
+| `manual_fix` | `manual_executing` |
+| `continue_retry` | `retry_continue` |
+| `stop_retry` | `escalated` |
 | `reject` | `rejected` |
 | `escalate` | `escalated` |
 
 4. 更新 Incident 状态。
 5. 写入审计日志。
 6. 尝试把飞书原卡片更新成审批结果卡片，去掉按钮，避免重复点击。
-7. 如果是 `approved`，后台启动 Phase 3 执行工作流。
+7. 如果是 `approved`，后台启动普通执行工作流。
+8. 如果是 `ai_approved` 或 `retry_continue`，后台启动 AI 重试工作流。
 
-## 16. 第十三段：审批后如何自动执行
+飞书回调接口兼容两种回调格式：
 
-审批回调是一个新的 HTTP 请求，已经没有诊断阶段的内存状态。
+- 旧版：`type = card_action`
+- 新版：`header.event_type = card.action.trigger`
+
+如果飞书原卡片更新成功，按钮会消失；如果只看到数据库状态已更新但卡片按钮仍可见，优先检查 `update_card` 调用是否成功，以及回调 payload 中是否携带了可用于更新的 `open_message_id`。
+
+## 16. 第十三段：确认后如何自动执行
+
+飞书回调是一个新的 HTTP 请求，已经没有诊断阶段的内存状态。
 
 所以 Agent 会先从 PostgreSQL 恢复执行所需状态：
 
@@ -717,7 +825,7 @@ Agent 收到后会做几件事：
 - risk_assessment
 - operator
 
-然后启动执行工作流：
+普通 Runbook 的 `approved` 会启动执行工作流：
 
 ```text
 execute
@@ -733,6 +841,18 @@ execute / verify
   → escalate
   → END
 ```
+
+AI 兜底或继续重试的 `ai_approved` / `retry_continue` 会启动重试工作流：
+
+```text
+retry_execute
+  → retry_verify
+    → recovered：generate_report → END
+    → not recovered 且 retry_count < 5：retry_analyze → 发送重试卡片 → END
+    → not recovered 且 retry_count >= 5：escalate → END
+```
+
+这个命名里有一点容易误解：首次点击「AI 自动执行」也会走 `retry_workflow`。原因是它需要支持“执行后未恢复就继续自省重试”的闭环，而不是只执行一次就结束。
 
 ### 16.1 Executor 的安全边界
 
@@ -754,9 +874,9 @@ kubectl get pods
 kubectl describe pod
 ```
 
-并且一次审批只执行第一个“会改变系统状态”的步骤。
+并且一次确认只执行第一个“会改变系统状态”的步骤。
 
-这样设计是为了避免一个 Runbook 中同时有扩容、删 Pod、回滚等多个动作时，被一次审批全部串行执行。
+这样设计是为了避免一个 Runbook 或 AI 方案中同时有扩容、删 Pod、回滚等多个动作时，被一次确认全部串行执行。
 
 ### 16.2 Runbook 的典型执行动作
 
@@ -770,7 +890,7 @@ kubectl scale deployment order-service -n demo --replicas=4
 
 ## 17. 第十四段：执行后如何验证恢复
 
-执行成功后，`verify` 节点会轮询 Prometheus。
+执行成功后，`verify` 或 `retry_verify` 节点会轮询 Prometheus。
 
 当前验证指标按告警名称匹配：
 
@@ -780,6 +900,17 @@ kubectl scale deployment order-service -n demo --replicas=4
 | `ERROR` | `error_rate` | `< 2%` | 错误率恢复 |
 | `LATENCY` / `RT` / `P99` | `rt_avg` | `< 1s` | 平均响应时间恢复 |
 | `OOM` / `MEMORY` | `memory` | `< 0.85` | 当前为演示阈值，后续可细化为容器内存使用率 |
+
+AI 兜底和 AI 重试方案如果携带了 `verification` 字段，会优先使用方案中的动态阈值。例如未知告警可以让 AI 指定：
+
+```json
+{
+  "metric": "error_rate",
+  "operator": "<",
+  "threshold": 0.02,
+  "description": "错误率低于 2%"
+}
+```
 
 以 CPU 告警为例，执行后 Agent 会多次查询：
 
@@ -802,7 +933,41 @@ status=timeout
 approval_status=escalated
 ```
 
-验证失败时不会继续自动扩大战果，会转人工处理。
+普通 Runbook 验证失败时会转人工处理。AI 兜底方案验证失败时，会先进入失败自省和重试循环；达到 5 轮上限后再自动升级人工。
+
+### 17.1 AI 执行失败后如何重试
+
+AI 方案执行失败或验证未恢复时，Agent 会调用：
+
+```text
+agent/agents/fallback.py::analyze_failure_and_retry
+```
+
+它会把以下信息交给 LLM：
+
+- 上一轮 AI 方案。
+- 上一轮执行结果，包括 stdout、stderr、exit_code。
+- 上一轮验证结果，包括指标、当前值、阈值和是否恢复。
+- 历史重试摘要。
+- 重新采集的 Prometheus、Loki、K8s、CMDB 上下文。
+
+LLM 需要输出新的修正方案、失败原因分析和新的验证条件。Agent 会把它保存到 Incident：
+
+```text
+retry_count += 1
+retry_history 追加上一轮摘要
+runbook_name = ai_retry
+approval_status = pending
+```
+
+然后发送飞书重试卡片：
+
+```text
+第 N/5 轮重试
+[继续 AI 执行] [转人工]
+```
+
+用户点击「继续 AI 执行」后，Agent 才会执行下一轮修正方案。
 
 ## 18. 第十五段：故障报告如何生成
 
@@ -823,6 +988,7 @@ agent/agents/report.py
 - Runbook 处置方案
 - 执行结果
 - 验证结果
+- AI 兜底推理和重试历史
 - 后续建议
 
 报告格式是 Markdown，并保存到 `reports` 表。
@@ -843,7 +1009,7 @@ agent/agents/report.py
 
 ## 19. 状态流转
 
-一次告警的典型状态流转：
+一次普通 Runbook 告警的典型状态流转：
 
 ```text
 diagnosing
@@ -879,6 +1045,36 @@ executed
   → escalated
 ```
 
+AI 兜底方案的典型状态流转：
+
+```text
+diagnosing
+  → pending_approval
+  → ai_approved
+  → executing
+  → executed
+  → pending_approval   # 未恢复，生成第 N 轮重试卡片
+  → retry_continue
+  → executing
+  → verified / resolved
+```
+
+如果用户选择人工处理：
+
+```text
+pending_approval
+  → manual_executing
+```
+
+如果 AI 重试达到上限：
+
+```text
+retry_continue
+  → executing
+  → executed
+  → escalated
+```
+
 ## 20. 当前告警链路中的关键时间
 
 | 阶段 | 典型耗时 |
@@ -890,7 +1086,8 @@ executed
 | LLM 诊断 | 取决于网络和模型响应 |
 | 飞书审批 | 取决于人工点击 |
 | 自动执行 kubectl | 默认 60 秒超时 |
-| 恢复验证 | 默认最多 300 秒，每 15 秒查一次 |
+| 恢复验证 | 默认最多 300 秒，每 15 秒查一次；AI 重试第 3 轮后最多 450 秒 |
+| AI 重试 | 每轮需要人工点击继续，最多 5 轮 |
 
 所以，从服务指标真正异常到飞书收到诊断审批卡片，通常会经历：
 
@@ -950,7 +1147,15 @@ curl -s "http://localhost:8000/api/v1/incidents/INC-xxxx/executions"
 curl -s "http://localhost:8000/api/v1/reports/INC-xxxx?format=markdown"
 ```
 
-### 21.9 查看 Agent 日志
+### 21.9 查看审计时间线
+
+```bash
+curl -s "http://localhost:8000/api/v1/incidents/INC-xxxx/audit"
+```
+
+这里可以看到审批、AI 方案生成、命令执行、恢复验证、重试自省、超限升级等事件。
+
+### 21.10 查看 Agent 日志
 
 ```bash
 ./ops.sh logs agent
@@ -969,11 +1174,17 @@ Prometheus 指标完成
 Loki 日志完成
 Kubernetes Pod 完成
 进入根因分析
+进入 Fallback Agent
+Fallback Agent 方案生成完成
 处置方案已生成
 诊断结果已保存到数据库
 准备发送诊断卡片
 收到飞书审批回调
 进入 run_execution_workflow
+进入 retry_execute
+进入 retry_verify
+进入 retry_analyze
+AI 重试卡片已发送
 自动执行完成
 恢复验证通过
 报告节点完成
@@ -1019,6 +1230,16 @@ Agent 是独立 FastAPI 服务，Prometheus/Alertmanager 只是把告警 Webhook
 
 重复告警会复用已有 Incident，然后工作流结束。
 
+### 22.6 未命中 Runbook 是否就不能处理？
+
+现在可以继续处理。
+
+未命中 Runbook 时，Agent 会调用 Fallback Agent 生成 `ai_fallback` 方案。这个方案仍然需要通过输出校验、风险评估和飞书人工确认，确认后才会执行。
+
+### 22.7 为什么 AI 自动执行失败后又要我点一次？
+
+因为每一轮修正方案都可能改变处置动作。Agent 会先把失败原因和新方案发到飞书，让人确认后再继续执行，避免 AI 在失败后无人确认地连续改集群。
+
 ## 23. 当前链路的边界
 
 当前项目是本地演示和学习系统，安全边界如下：
@@ -1026,15 +1247,18 @@ Agent 是独立 FastAPI 服务，Prometheus/Alertmanager 只是把告警 Webhook
 - 不会绕过人工审批直接改 Kubernetes。
 - 只执行白名单 kubectl 命令。
 - 只自动执行第一个变更动作。
+- AI 兜底方案必须通过结构化校验和风险评估。
+- AI 重试每轮都需要飞书确认。
+- AI 重试最多 5 轮，超限自动升级人工。
 - 风险评估不允许时会升级人工。
 - 执行后必须做 Prometheus 恢复验证。
-- 验证失败会升级人工。
+- 普通 Runbook 验证失败会升级人工；AI 兜底验证失败会先进入确认式重试循环。
 - 飞书通知失败不影响 Incident 数据落库。
 - 本地 Demo 扩容建议最多到 4 副本，避免 Kind 资源耗尽。
 
 ## 24. 一条 CPU 告警的完整样例
 
-下面用 CPU 告警作为完整样例。其他告警类型会复用同一条 Agent 主链路，只是在 Prometheus 规则、Runbook 和恢复验证指标上不同。
+下面用 CPU 告警作为完整样例。其他告警类型会复用同一条 Agent 主链路，只是在 Prometheus 规则、Runbook / AI 兜底方案和恢复验证指标上不同。
 
 假设 `order-service` 开启 CPU 故障：
 
@@ -1076,3 +1300,34 @@ curl -s -X POST "http://localhost:8081/fault/cpu?enable=true"
 30. Agent 将 Incident 标记为 `resolved`。
 
 这就是当前项目里 CPU 告警从产生到闭环的完整路径。错误率、延迟、OOM 等告警会沿用同样的处理框架，只替换“触发规则、处置 Runbook、验证指标”这几处差异。
+
+## 25. 一条未知告警的 AI 兜底样例
+
+下面用未知告警作为 AI 兜底样例。假设 Alertmanager 或 E2E 脚本发送了一个当前没有预置 Runbook 的告警：
+
+```text
+ThreadPoolExhausted
+```
+
+完整链路如下：
+
+1. Alertmanager POST 到 `/api/v1/alerts`。
+2. Agent 创建 Incident 并采集 Prometheus、Loki、K8s、CMDB 上下文。
+3. RCA 生成根因、证据和置信度。
+4. `load_runbook()` 未命中。
+5. Agent 调用 Fallback Agent 生成 `ai_fallback` 方案。
+6. Agent 校验 AI 输出的步骤、命令白名单和验证条件。
+7. Risk Agent 评估 AI 方案风险，并写入 `risk_assessment.ai_generated=true`。
+8. Incident 进入 `pending_approval`，同时写入 `ai_reasoning`。
+9. 飞书收到 AI 自主诊断卡片。
+10. 人点击「AI 自动执行」。
+11. 飞书回调 `/api/v1/approvals/callback`，状态变为 `ai_approved`。
+12. Agent 启动 AI 重试工作流，执行当前 AI 方案。
+13. Agent 用 AI 方案里的 `verification` 轮询 Prometheus。
+14. 如果恢复，生成 Markdown 报告并关闭 Incident。
+15. 如果未恢复，Agent 重新采集上下文，分析失败原因，生成 `ai_retry` 方案。
+16. 飞书收到第 N/5 轮重试卡片。
+17. 人点击「继续 AI 执行」后进入下一轮；点击「转人工」则升级人工。
+18. 5 轮仍未恢复时，Agent 自动升级人工并写入审计日志。
+
+这条链路让未知告警也能形成“诊断 → 方案 → 人确认 → 执行 → 验证 → 重试 / 报告”的闭环。

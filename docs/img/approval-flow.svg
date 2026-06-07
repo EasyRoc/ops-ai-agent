@@ -1,16 +1,19 @@
-<svg width="1200" height="640" viewBox="0 0 1200 640" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
-  <title id="title">告警诊断、审批与自动处置流程</title>
-  <desc id="desc">展示告警从触发、诊断、生成方案、飞书审批，到审批通过后的自动执行、恢复验证和报告生成流程。</desc>
+<svg width="1200" height="760" viewBox="0 0 1200 760" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">告警诊断、AI 兜底、审批与重试流程</title>
+  <desc id="desc">展示告警从触发、上下文采集、Runbook 或 AI 兜底方案、飞书确认、自动执行、恢复验证、失败重试到报告或转人工的完整流程。</desc>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="640" gradientUnits="userSpaceOnUse">
+    <linearGradient id="bg" x1="0" y1="0" x2="1200" y2="760" gradientUnits="userSpaceOnUse">
       <stop stop-color="#FFFFFF"/>
       <stop offset="1" stop-color="#F8FAFC"/>
     </linearGradient>
-    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+    <marker id="arrowBlue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
       <path d="M2 2L10 6L2 10" stroke="#0EA5E9" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
     <marker id="arrowGreen" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
       <path d="M2 2L10 6L2 10" stroke="#059669" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <marker id="arrowOrange" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2L10 6L2 10" stroke="#EA580C" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     </marker>
     <marker id="arrowRed" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
       <path d="M2 2L10 6L2 10" stroke="#DC2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -22,99 +25,138 @@
       .title { font: 700 30px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0F172A; }
       .subtitle { font: 400 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748B; }
       .step { fill: #FFFFFF; stroke: #BAE6FD; stroke-width: 1.6; filter: url(#shadow); }
-      .step-warn { fill: #FFF7ED; stroke: #FDBA74; }
-      .step-ok { fill: #ECFDF5; stroke: #86EFAC; }
-      .step-purple { fill: #F5F3FF; stroke: #C4B5FD; }
-      .step-red { fill: #FEF2F2; stroke: #FCA5A5; }
-      .label { font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1E293B; }
-      .small { font: 400 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748B; }
-      .tiny { font: 400 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748B; }
-      .num { font: 800 18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0284C7; }
-      .arrow { stroke: #0EA5E9; stroke-width: 2.2; marker-end: url(#arrow); fill: none; }
+      .warn { fill: #FFF7ED; stroke: #FDBA74; }
+      .ok { fill: #ECFDF5; stroke: #86EFAC; }
+      .purple { fill: #F5F3FF; stroke: #C4B5FD; }
+      .red { fill: #FEF2F2; stroke: #FCA5A5; }
+      .slate { fill: #F8FAFC; stroke: #CBD5E1; }
+      .label { font: 700 15px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #1E293B; }
+      .small { font: 400 12.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748B; }
+      .tiny { font: 400 11.5px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #64748B; }
+      .num { font: 800 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0284C7; }
+      .arrow-blue { stroke: #0EA5E9; stroke-width: 2.2; marker-end: url(#arrowBlue); fill: none; }
       .arrow-green { stroke: #059669; stroke-width: 2.2; marker-end: url(#arrowGreen); fill: none; }
+      .arrow-orange { stroke: #EA580C; stroke-width: 2.2; marker-end: url(#arrowOrange); fill: none; }
       .arrow-red { stroke: #DC2626; stroke-width: 2.2; marker-end: url(#arrowRed); fill: none; }
       .dash { stroke-dasharray: 7 6; }
-      .result { font: 700 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #047857; }
+      .result { font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #047857; }
       .danger { font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #B91C1C; }
+      .hint { font: 700 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #C2410C; }
     </style>
   </defs>
 
-  <rect width="1200" height="640" rx="28" fill="url(#bg)"/>
-  <text x="48" y="58" class="title">告警诊断、审批与自动处置流程</text>
-  <text x="48" y="86" class="subtitle">Phase 3：人工确认后执行白名单动作，随后验证恢复并生成故障报告</text>
+  <rect width="1200" height="760" rx="28" fill="url(#bg)"/>
+  <text x="48" y="58" class="title">告警诊断、AI 兜底、审批与重试流程</text>
+  <text x="48" y="86" class="subtitle">Runbook 命中走标准审批执行；未命中走 AI 兜底，执行失败后最多 5 轮确认式自省重试</text>
 
-  <rect x="42" y="146" width="154" height="102" rx="18" class="step step-warn"/>
-  <text x="70" y="180" class="num">01</text>
-  <text x="70" y="210" class="label">告警触发</text>
-  <text x="70" y="234" class="small">Prometheus Rule</text>
+  <rect x="44" y="138" width="142" height="94" rx="18" class="step warn"/>
+  <text x="70" y="170" class="num">01</text>
+  <text x="70" y="198" class="label">告警触发</text>
+  <text x="70" y="220" class="small">Prometheus Rule</text>
 
-  <rect x="232" y="146" width="164" height="102" rx="18" class="step"/>
-  <text x="260" y="180" class="num">02</text>
-  <text x="260" y="210" class="label">接收 Webhook</text>
-  <text x="260" y="234" class="small">创建 / 去重 Incident</text>
+  <rect x="222" y="138" width="154" height="94" rx="18" class="step"/>
+  <text x="248" y="170" class="num">02</text>
+  <text x="248" y="198" class="label">Webhook</text>
+  <text x="248" y="220" class="small">Incident + 去重</text>
 
-  <rect x="432" y="146" width="164" height="102" rx="18" class="step"/>
-  <text x="460" y="180" class="num">03</text>
-  <text x="460" y="210" class="label">采集上下文</text>
-  <text x="460" y="234" class="small">指标、日志、Pod、CMDB</text>
+  <rect x="414" y="138" width="154" height="94" rx="18" class="step"/>
+  <text x="440" y="170" class="num">03</text>
+  <text x="440" y="198" class="label">采集上下文</text>
+  <text x="440" y="220" class="small">指标 / 日志 / Pod</text>
 
-  <rect x="632" y="146" width="164" height="102" rx="18" class="step step-purple"/>
-  <text x="660" y="180" class="num">04</text>
-  <text x="660" y="210" class="label">根因分析</text>
-  <text x="660" y="234" class="small">DeepSeek / 规则兜底</text>
+  <rect x="606" y="138" width="154" height="94" rx="18" class="step purple"/>
+  <text x="632" y="170" class="num">04</text>
+  <text x="632" y="198" class="label">RCA 分析</text>
+  <text x="632" y="220" class="small">LLM / 规则兜底</text>
 
-  <rect x="832" y="146" width="174" height="102" rx="18" class="step step-purple"/>
-  <text x="860" y="180" class="num">05</text>
-  <text x="860" y="210" class="label">方案与风险</text>
-  <text x="860" y="234" class="small">Runbook + Risk</text>
+  <rect x="798" y="138" width="154" height="94" rx="18" class="step purple"/>
+  <text x="824" y="170" class="num">05</text>
+  <text x="824" y="198" class="label">Runbook?</text>
+  <text x="824" y="220" class="small">命中 / 未命中</text>
 
-  <rect x="1040" y="146" width="124" height="102" rx="18" class="step step-warn"/>
-  <text x="1064" y="180" class="num">06</text>
-  <text x="1064" y="210" class="label">飞书审批</text>
-  <text x="1064" y="234" class="small">三种按钮</text>
+  <path d="M186 185H222" class="arrow-blue"/>
+  <path d="M376 185H414" class="arrow-blue"/>
+  <path d="M568 185H606" class="arrow-blue"/>
+  <path d="M760 185H798" class="arrow-blue"/>
 
-  <path d="M196 197H232" class="arrow"/>
-  <path d="M396 197H432" class="arrow"/>
-  <path d="M596 197H632" class="arrow"/>
-  <path d="M796 197H832" class="arrow"/>
-  <path d="M1006 197H1040" class="arrow"/>
+  <rect x="678" y="300" width="164" height="102" rx="18" class="step ok"/>
+  <text x="706" y="334" class="num">06A</text>
+  <text x="706" y="362" class="label">Runbook + Risk</text>
+  <text x="706" y="384" class="small">标准处置方案</text>
 
-  <rect x="856" y="346" width="168" height="108" rx="18" class="step step-ok"/>
-  <text x="884" y="380" class="num">07</text>
-  <text x="884" y="410" class="label">自动执行</text>
-  <text x="884" y="434" class="small">白名单 kubectl</text>
+  <rect x="934" y="300" width="178" height="102" rx="18" class="step warn"/>
+  <text x="962" y="334" class="num">06B</text>
+  <text x="962" y="362" class="label">AI Fallback</text>
+  <text x="962" y="384" class="small">未知告警生成方案</text>
 
-  <rect x="620" y="346" width="168" height="108" rx="18" class="step step-ok"/>
-  <text x="648" y="380" class="num">08</text>
-  <text x="648" y="410" class="label">恢复验证</text>
-  <text x="648" y="434" class="small">Prometheus 轮询</text>
+  <path d="M870 232C856 266 812 282 770 300" class="arrow-green"/>
+  <path d="M910 232C956 260 1000 272 1020 300" class="arrow-orange"/>
+  <text x="752" y="278" class="result">命中</text>
+  <text x="990" y="278" class="hint">未命中</text>
 
-  <rect x="384" y="346" width="168" height="108" rx="18" class="step step-ok"/>
-  <text x="412" y="380" class="num">09</text>
-  <text x="412" y="410" class="label">生成报告</text>
-  <text x="412" y="434" class="small">Markdown + 历史模式</text>
+  <rect x="678" y="480" width="164" height="102" rx="18" class="step warn"/>
+  <text x="706" y="514" class="num">07A</text>
+  <text x="706" y="542" class="label">飞书审批</text>
+  <text x="706" y="564" class="small">批准 / 拒绝 / 转人工</text>
 
-  <rect x="148" y="346" width="168" height="108" rx="18" class="step step-red"/>
-  <text x="176" y="380" class="num">10</text>
-  <text x="176" y="410" class="label">转人工</text>
-  <text x="176" y="434" class="small">拒绝 / 超时 / 失败</text>
+  <rect x="934" y="480" width="178" height="102" rx="18" class="step warn"/>
+  <text x="962" y="514" class="num">07B</text>
+  <text x="962" y="542" class="label">AI 确认</text>
+  <text x="962" y="564" class="small">AI 自动 / 我自己来</text>
 
-  <path d="M1102 248C1102 316 1020 354 1024 400" class="arrow-green"/>
-  <path d="M856 400H788" class="arrow-green"/>
-  <path d="M620 400H552" class="arrow-green"/>
-  <path d="M1102 248C1102 498 392 526 316 420" class="arrow-red dash"/>
-  <path d="M704 454C704 510 374 522 316 420" class="arrow-red dash"/>
+  <path d="M760 402V480" class="arrow-green"/>
+  <path d="M1023 402V480" class="arrow-orange"/>
 
-  <text x="1034" y="314" class="result">approve</text>
-  <text x="496" y="334" class="result">recovered</text>
-  <text x="336" y="512" class="danger">reject / escalate / verify timeout</text>
+  <rect x="406" y="480" width="170" height="102" rx="18" class="step ok"/>
+  <text x="434" y="514" class="num">08</text>
+  <text x="434" y="542" class="label">自动执行</text>
+  <text x="434" y="564" class="small">白名单 kubectl</text>
 
-  <rect x="384" y="512" width="420" height="64" rx="18" class="step"/>
-  <text x="418" y="548" class="label">最终沉淀</text>
-  <text x="518" y="548" class="small">Incident 状态、执行记录、审计日志、故障报告</text>
+  <path d="M678 531H576" class="arrow-green"/>
+  <path d="M934 531H576" class="arrow-orange"/>
+  <text x="602" y="516" class="result">approved / ai_approved</text>
 
-  <path d="M468 454V512" class="arrow"/>
-  <path d="M232 454C232 500 316 530 384 544" class="arrow-red dash"/>
+  <rect x="210" y="480" width="150" height="102" rx="18" class="step ok"/>
+  <text x="238" y="514" class="num">09</text>
+  <text x="238" y="542" class="label">恢复验证</text>
+  <text x="238" y="564" class="small">Prometheus 轮询</text>
 
-  <text x="48" y="604" class="result">结果：人审批，系统执行；执行后必须验证，验证通过才进入报告沉淀。</text>
+  <path d="M406 531H360" class="arrow-green"/>
+
+  <rect x="44" y="480" width="130" height="102" rx="18" class="step ok"/>
+  <text x="70" y="514" class="num">10</text>
+  <text x="70" y="542" class="label">报告沉淀</text>
+  <text x="70" y="564" class="small">Report + Fault DB</text>
+
+  <path d="M210 531H174" class="arrow-green"/>
+  <text x="182" y="516" class="result">recovered</text>
+
+  <rect x="406" y="632" width="170" height="88" rx="18" class="step warn"/>
+  <text x="434" y="666" class="num">11</text>
+  <text x="434" y="694" class="label">失败自省</text>
+  <text x="434" y="714" class="small">新上下文 + 新方案</text>
+
+  <path d="M285 582C298 650 352 676 406 676" class="arrow-orange dash"/>
+  <path d="M576 676C820 684 1042 634 1023 582" class="arrow-orange dash"/>
+  <text x="306" y="628" class="hint">AI 未恢复</text>
+  <text x="740" y="670" class="hint">第 N/5 轮重试卡片</text>
+
+  <rect x="44" y="632" width="170" height="88" rx="18" class="step red"/>
+  <text x="72" y="666" class="num">12</text>
+  <text x="72" y="694" class="label">转人工</text>
+  <text x="72" y="714" class="small">拒绝 / 超限 / 风险阻断</text>
+
+  <path d="M678 582C560 628 332 636 214 676" class="arrow-red dash"/>
+  <path d="M934 582C738 628 394 636 214 676" class="arrow-red dash"/>
+  <path d="M406 676H214" class="arrow-red dash"/>
+  <text x="236" y="696" class="danger">reject / manual / 5轮耗尽</text>
+
+  <rect x="638" y="632" width="304" height="88" rx="18" class="step slate"/>
+  <text x="672" y="670" class="label">全程可观测</text>
+  <text x="672" y="696" class="small">Incident、Execution、retry_history、audit_logs、Web Console 时间线</text>
+
+  <path d="M491 582V632" class="arrow-blue"/>
+  <path d="M576 676H638" class="arrow-blue"/>
+
+  <text x="48" y="742" class="result">结果：标准告警走 Runbook；未知告警走 AI 兜底；每次变更都需要人确认，执行后必须验证，失败才进入确认式重试。</text>
 </svg>

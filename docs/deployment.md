@@ -516,7 +516,7 @@ FEISHU_APP_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
 ### 9.4 配置卡片审批回调
 
-Phase 2 的诊断卡片包含「批准执行」「拒绝」「转人工」按钮。首次点击按钮时，
+飞书诊断卡片包含「批准执行」「拒绝」「转人工」按钮；AI 兜底卡片还包含「AI 自动执行」「我自己来」按钮；重试卡片包含「继续 AI 执行」「转人工」按钮。首次点击按钮时，
 如果飞书提示“该应用尚未配置卡片回调”，请参考：
 
 - [飞书卡片回调配置指南](feishu-card-callback.md)
@@ -770,4 +770,4 @@ cp .env.example .env
 
 ---
 
-> **下一步**：Phase 2 将在此环境基础上增加 Runbook 匹配、风险评估和飞书交互审批功能。
+> **当前状态**：本地环境已支持 Runbook 自动执行、AI 兜底方案、飞书确认、失败自省重试、审计时间线和故障报告。后续调试建议优先执行 `./ops.sh status`、`./ops.sh test ai`、`tests/e2e_retry_loop.sh`。
