@@ -759,7 +759,8 @@ cp .env.example .env
 | `./ops.sh demo start` | 构建、加载并部署样例服务 |
 | `./ops.sh demo stop` | 删除样例服务 namespace |
 | `./ops.sh demo restart` | 重新构建并部署样例服务 |
-| `./ops.sh test` | 执行真实 CPU 故障注入 E2E |
+| `./ops.sh test` | 执行 CPU 故障注入 + AI 兜底诊断 E2E |
+| `./ops.sh test ai` | 只执行 AI 兜底诊断 E2E |
 | `./ops.sh clean` | 删除 Kind 集群，保留数据库卷 |
 | `./ops.sh clean --all` | 删除 Kind 集群和数据库卷 |
 | `./ops.sh help` | 查看完整命令说明 |

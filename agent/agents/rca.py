@@ -403,7 +403,11 @@ async def _notify_diagnosis(
     runbook: dict | None = None,
     risk_assessment: dict | None = None,
 ):
-    """推送诊断结果卡片到飞书群"""
+    """推送诊断结果卡片到飞书群。
+
+    预置 Runbook 继续使用普通诊断卡片；AI 兜底方案使用专用黄色卡片，
+    让用户在飞书里一眼看出方案来源，并选择 AI 自动执行或人工处理。
+    """
     from agent.channels.feishu import send_card_to_chat
     from agent.templates import render_card
     from agent.tools.cmdb import get_service_chat_id
@@ -421,37 +425,67 @@ async def _notify_diagnosis(
         alert_name = alert.get("alertname", "未知")
         action_plan = _format_action_plan(runbook)
         risk_summary = risk_assessment or {}
+        is_ai = bool(runbook and runbook.get("ai_generated"))
+        template_name = "fallback_diagnosis_card" if is_ai else "diagnosis_card"
         logger.info(
-            "准备发送诊断卡片: incident=%s, service=%s, runbook=%s, risk=%s",
+            "准备发送诊断卡片: incident=%s, service=%s, runbook=%s, template=%s, risk=%s",
             incident_id,
             service,
             runbook.get("name") if runbook else "-",
+            template_name,
             risk_summary.get("level", "未评估"),
         )
 
-        card = render_card(
-            "diagnosis_card",
-            alert_title=f"[{severity}] {service} - {alert_name}",
-            severity_color=severity_color_map.get(severity, "blue"),
-            root_cause=diagnosis.get("root_cause", ""),
-            action_plan=action_plan,
-            risk_level=risk_summary.get("level", "未评估"),
-            risk_score=str(risk_summary.get("score", 0)),
-            risk_warnings=_format_risk_warnings(risk_summary),
-            evidence_list="\n".join(diagnosis.get("evidence", [])),
-            confidence=f"{diagnosis.get('confidence', 0) * 100:.0f}",
-            incident_id=incident_id,
-            status="待审批" if runbook else "待确认",
-            duration="刚刚",
-        )
+        if is_ai:
+            verification = runbook.get("verification") or risk_summary.get("verification") or {}
+            verify_text = (
+                f"{verification.get('description', '未提供验证说明')} "
+                f"（指标: {verification.get('metric', 'N/A')}, "
+                f"操作符: {verification.get('operator', 'N/A')}, "
+                f"阈值: {verification.get('threshold', 'N/A')}）"
+            )
+            logger.info(
+                "诊断卡片使用 AI 兜底模板: incident=%s, verification=%s",
+                incident_id,
+                verification,
+            )
+            card = render_card(
+                template_name,
+                alert_title=f"[{severity}] {service} - {alert_name}",
+                root_cause=diagnosis.get("root_cause", ""),
+                ai_reasoning=runbook.get("ai_reasoning", "AI 未提供推理过程"),
+                action_plan=action_plan,
+                verify_condition=verify_text,
+                evidence_list="\n".join(diagnosis.get("evidence", [])),
+                confidence=f"{diagnosis.get('confidence', 0) * 100:.0f}",
+                incident_id=incident_id,
+                duration="刚刚",
+            )
+        else:
+            card = render_card(
+                template_name,
+                alert_title=f"[{severity}] {service} - {alert_name}",
+                severity_color=severity_color_map.get(severity, "blue"),
+                root_cause=diagnosis.get("root_cause", ""),
+                action_plan=action_plan,
+                risk_level=risk_summary.get("level", "未评估"),
+                risk_score=str(risk_summary.get("score", 0)),
+                risk_warnings=_format_risk_warnings(risk_summary),
+                evidence_list="\n".join(diagnosis.get("evidence", [])),
+                confidence=f"{diagnosis.get('confidence', 0) * 100:.0f}",
+                incident_id=incident_id,
+                status="待审批" if runbook else "待确认",
+                duration="刚刚",
+            )
 
         chat_id = await get_service_chat_id(service)
         if chat_id:
             result = await send_card_to_chat(chat_id, card)
             logger.info(
-                "诊断通知已发送: chat_id=%s, incident=%s, code=%s",
+                "诊断通知已发送: chat_id=%s, incident=%s, template=%s, code=%s",
                 chat_id,
                 incident_id,
+                template_name,
                 result.get("code"),
             )
         else:

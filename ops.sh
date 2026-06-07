@@ -35,7 +35,7 @@ Ops AI Agent 本地环境管理工具
   ./ops.sh demo start     构建、加载并部署 demo 服务
   ./ops.sh demo stop      删除 demo 服务
   ./ops.sh demo restart   重新构建并部署 demo 服务
-  ./ops.sh test           运行 CPU 故障注入端到端测试
+  ./ops.sh test [场景]    运行端到端测试（默认: all；可选: all, cpu, ai）
   ./ops.sh clean          停止服务并删除 Kind 集群
   ./ops.sh clean --all    同时删除 Docker Compose 数据卷
   ./ops.sh help
@@ -742,10 +742,28 @@ stop_environment() {
 }
 
 run_e2e() {
+  local scenario="${1:-all}"
+
   require_http_health Agent http://localhost:8000/health
   require_http_health Prometheus http://localhost:9090/-/healthy
   require_http_health order-service http://localhost:8081/actuator/health
-  bash "$ROOT_DIR/tests/e2e_phase1.sh"
+
+  case "$scenario" in
+    all)
+      bash "$ROOT_DIR/tests/e2e_phase1.sh"
+      bash "$ROOT_DIR/tests/e2e_ai_fallback.sh"
+      ;;
+    cpu|phase1)
+      bash "$ROOT_DIR/tests/e2e_phase1.sh"
+      ;;
+    ai|fallback)
+      bash "$ROOT_DIR/tests/e2e_ai_fallback.sh"
+      ;;
+    *)
+      die "未知 test 场景: $scenario，可选: all, cpu, ai"
+      return 1
+      ;;
+  esac
 }
 
 clean_environment() {
@@ -840,7 +858,7 @@ main() {
       esac
       ;;
     test)
-      run_e2e
+      run_e2e "${1:-all}"
       ;;
     clean)
       clean_environment "$@"

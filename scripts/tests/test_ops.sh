@@ -91,6 +91,7 @@ test_usage_lists_primary_commands() {
   output="$(usage)"
   assert_contains "$output" './ops.sh bootstrap' 'help lists bootstrap'
   assert_contains "$output" './ops.sh status' 'help lists status'
+  assert_contains "$output" './ops.sh test [场景]' 'help lists selectable test scenarios'
   assert_contains "$output" './ops.sh stop' 'help lists stop'
   remove_fixture
 }
@@ -330,6 +331,36 @@ test_e2e_refuses_unhealthy_environment() {
   remove_fixture
 }
 
+test_e2e_dispatch_runs_ai_diagnosis_scenario() {
+  new_fixture
+  mkdir -p "$FIXTURE/tests"
+  source_ops
+  local trace="$FIXTURE/trace"
+  require_http_health() {
+    printf 'health:%s:%s\n' "$1" "$2" >>"$trace"
+  }
+  bash() {
+    printf 'bash:%s\n' "$1" >>"$trace"
+  }
+
+  run_e2e
+  assert_contains "$(cat "$trace")" "bash:$FIXTURE/tests/e2e_phase1.sh" \
+    'default E2E test runs CPU scenario'
+  assert_contains "$(cat "$trace")" "bash:$FIXTURE/tests/e2e_ai_fallback.sh" \
+    'default E2E test runs AI fallback scenario'
+
+  : >"$trace"
+  run_e2e ai
+  assert_contains "$(cat "$trace")" "bash:$FIXTURE/tests/e2e_ai_fallback.sh" \
+    'AI E2E scenario can run independently'
+  if [[ "$(cat "$trace")" != *"e2e_phase1.sh"* ]]; then
+    pass 'AI-only E2E scenario skips CPU scenario'
+  else
+    fail 'AI-only E2E scenario skips CPU scenario'
+  fi
+  remove_fixture
+}
+
 test_restart_starts_data_services_before_agent() {
   new_fixture
   source_ops
@@ -497,6 +528,7 @@ run_all() {
   test_missing_dependency_prints_platform_hint
   test_documentation_recommends_ops_cli
   test_e2e_refuses_unhealthy_environment
+  test_e2e_dispatch_runs_ai_diagnosis_scenario
   test_restart_starts_data_services_before_agent
   test_retry_command_recovers_from_transient_failure
   test_existing_helm_repo_does_not_require_network_refresh

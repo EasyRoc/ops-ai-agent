@@ -196,7 +196,7 @@ SERVICE_CHAT_IDS='{"order-service":"oc_xxx","payment-service":"oc_xxx"}'
 |------|------|
 | 优先级 | P1 |
 | 类型 | 自动化测试 |
-| 操作步骤 | 执行 `bash -n ops.sh && for f in tests/e2e_phase1.sh tests/e2e_phase2.sh tests/e2e_phase3.sh; do bash -n "$f"; done` |
+| 操作步骤 | 执行 `bash -n ops.sh && for f in tests/e2e_phase1.sh tests/e2e_ai_fallback.sh tests/e2e_phase2.sh tests/e2e_phase3.sh; do bash -n "$f"; done` |
 | 预期结果 | 命令无输出且退出码为 0 |
 
 ### TC-AUTO-003 本地脚本测试
@@ -551,8 +551,8 @@ curl -s -X POST http://localhost:8000/api/v1/approvals/callback \
 | 优先级 | P0 |
 | 类型 | 端到端 |
 | 前置条件 | 环境已启动，order-service 端口转发可用 |
-| 操作步骤 | 执行 `./ops.sh test` |
-| 预期结果 | 脚本注入 CPU 故障，Prometheus 触发告警，Agent 创建 Incident 并完成诊断 |
+| 操作步骤 | 执行 `./ops.sh test cpu`，或执行 `./ops.sh test` 跑默认全量 E2E |
+| 预期结果 | CPU 场景会注入故障，Prometheus 触发告警，Agent 创建 Incident 并完成诊断；默认全量还会继续执行 AI 兜底诊断场景 |
 | 清理方式 | 脚本退出时会自动调用 `/fault/reset` |
 
 也可以直接执行：
@@ -560,6 +560,17 @@ curl -s -X POST http://localhost:8000/api/v1/approvals/callback \
 ```bash
 tests/e2e_phase1.sh
 ```
+
+### TC-E2E-001B AI 兜底诊断
+
+| 字段 | 内容 |
+|------|------|
+| 优先级 | P0 |
+| 类型 | 端到端 |
+| 前置条件 | Agent、PostgreSQL、Redis、Prometheus、Kubernetes Demo 和 LLM 配置均可用 |
+| 操作步骤 | 执行 `./ops.sh test ai` |
+| 预期结果 | 脚本发送未知告警，Agent 生成 `ai_fallback` 方案，`risk_assessment.ai_generated=true`，审批状态先进入 `pending`，模拟「我自己来」后进入 `manual_executing` |
+| 排查提示 | 如果未生成 `ai_fallback`，优先检查 LLM 配置、Agent 日志中的 `Fallback Agent` 和 `AI 兜底` 关键字 |
 
 ## 14. Phase 2 端到端测试
 
@@ -896,6 +907,7 @@ docker compose exec -T postgres psql -U opsagent -d ops_agent \
 
 - `./ops.sh status` 显示 Agent、Prometheus、Alertmanager、Loki、Grafana、order-service 正常。
 - `.venv/bin/python -m unittest discover -s tests -p 'test*.py' -v` 全部通过。
+- `./ops.sh test ai` 通过。
 - `tests/e2e_phase2.sh` 通过。
 - `tests/e2e_phase3.sh` 通过。
 - Web Console 首页、详情页、执行记录页、报告页可以访问。

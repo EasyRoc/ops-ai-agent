@@ -154,7 +154,9 @@ admin / admin123
 | `./ops.sh status` | 查看健康状态和配置提示 |
 | `./ops.sh logs agent` | 查看 Agent 日志 |
 | `./ops.sh demo restart` | 重新构建并部署 Demo 服务 |
-| `./ops.sh test` | 运行 Phase 1 CPU 故障注入端到端演示 |
+| `./ops.sh test` | 运行 CPU 故障注入 + AI 兜底诊断端到端演示 |
+| `./ops.sh test ai` | 只运行 AI 兜底诊断端到端演示 |
+| `./ops.sh test cpu` | 只运行 CPU 故障注入端到端演示 |
 | `tests/e2e_phase2.sh` | 验证 Runbook、风险评估和审批状态 |
 | `tests/e2e_phase3.sh` | 验证审批后自动执行、恢复验证和报告生成 |
 | `./ops.sh clean` | 停止服务并删除 Kind 集群 |
@@ -168,6 +170,16 @@ admin / admin123
 ./ops.sh status
 ./ops.sh test
 ```
+
+只验证 AI 兜底诊断：
+
+```bash
+./ops.sh test ai
+```
+
+AI 兜底脚本会发送一个不会命中预置 Runbook 的告警，等待 Agent 生成
+`ai_fallback` 方案，再模拟飞书「我自己来」按钮，验证状态进入
+`manual_executing`。
 
 Phase 3 完整链路演示：
 
@@ -253,6 +265,7 @@ ops-ai-agent/
 
 ```bash
 bash -n ops.sh
+bash -n tests/e2e_ai_fallback.sh
 bash scripts/tests/test_ops.sh
 .venv/bin/python -m unittest discover -s tests -p 'test*.py' -v
 ```
@@ -260,6 +273,7 @@ bash scripts/tests/test_ops.sh
 端到端验收：
 
 ```bash
+./ops.sh test ai
 tests/e2e_phase2.sh
 tests/e2e_phase3.sh
 ```

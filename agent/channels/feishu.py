@@ -95,6 +95,10 @@ async def handle_card_action(action: str, incident_id: str) -> str:
         "approve": "approved",
         "reject": "rejected",
         "escalate": "escalated",
+        "approve_ai": "ai_approved",
+        "manual_fix": "manual_executing",
+        "continue_retry": "retry_continue",
+        "stop_retry": "escalated",
     }
     status = status_map.get(action, "pending")
     logger.info(

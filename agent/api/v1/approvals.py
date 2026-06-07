@@ -16,6 +16,9 @@ APPROVAL_DISPLAY = {
     "rejected": ("已拒绝", "red"),
     "escalated": ("已转人工", "orange"),
     "pending": ("待审批", "blue"),
+    "ai_approved": ("已批准 AI 自动执行", "green"),
+    "manual_executing": ("已转人工执行，请手动执行方案中的命令", "blue"),
+    "retry_continue": ("已批准继续重试", "orange"),
 }
 
 
@@ -170,8 +173,9 @@ async def approval_callback(request: Request, background_tasks: BackgroundTasks)
         {"action": action, "callback_type": callback_type},
     )
 
-    # 审批通过后触发 Phase 3 执行工作流（execute → verify → report）
-    if approval_status == "approved":
+    # 审批通过后触发 Phase 3 执行工作流（execute → verify → report）。
+    # AI 兜底卡片的“AI 自动执行”复用同一个执行入口；重试类动作留给 Phase C 专用工作流处理。
+    if approval_status in {"approved", "ai_approved"}:
         background_tasks.add_task(run_execution_workflow, incident_id, body)
 
     logger.info(

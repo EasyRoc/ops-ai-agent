@@ -1,0 +1,62 @@
+{
+  "config": { "wide_screen_mode": true },
+  "header": {
+    "title": { "tag": "plain_text", "content": "{{alert_title}} - 第 {{retry_round}}/5 轮重试" },
+    "template": "orange"
+  },
+  "elements": [
+    {
+      "tag": "markdown",
+      "content": "**AI 第 {{retry_round}} 轮重试，上一轮处置未恢复，已自动调整方案**"
+    },
+    { "tag": "hr" },
+    {
+      "tag": "markdown",
+      "content": "**上轮失败原因：**\n{{failure_reason}}"
+    },
+    { "tag": "hr" },
+    {
+      "tag": "markdown",
+      "content": "**本轮自省分析：**\n{{retry_reasoning}}"
+    },
+    { "tag": "hr" },
+    {
+      "tag": "markdown",
+      "content": "**本轮修正方案：**\n{{action_plan}}"
+    },
+    { "tag": "hr" },
+    {
+      "tag": "markdown",
+      "content": "**验证条件：** {{verify_condition}}"
+    },
+    { "tag": "hr" },
+    {
+      "tag": "markdown",
+      "content": "**历史摘要：**\n{{retry_history_summary}}"
+    },
+    { "tag": "hr" },
+    {
+      "tag": "action",
+      "actions": [
+        {
+          "tag": "button",
+          "text": { "tag": "plain_text", "content": "继续 AI 执行" },
+          "type": "primary",
+          "value": { "action": "continue_retry", "incident_id": "{{incident_id}}", "round": {{retry_round}} }
+        },
+        {
+          "tag": "button",
+          "text": { "tag": "plain_text", "content": "转人工" },
+          "type": "danger",
+          "value": { "action": "stop_retry", "incident_id": "{{incident_id}}" }
+        }
+      ]
+    },
+    {
+      "tag": "note",
+      "elements": [
+        { "tag": "plain_text", "content": "事件编号: {{incident_id}} | 状态: 第 {{retry_round}}/5 轮重试 | 已重试 {{retry_round}} 轮" }
+      ]
+    }
+  ]
+}
