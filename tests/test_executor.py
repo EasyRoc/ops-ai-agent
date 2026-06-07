@@ -30,6 +30,29 @@ class ExecutorValidationTest(TestCase):
 
 
 class ExecutorWorkflowTest(IsolatedAsyncioTestCase):
+    async def test_record_execution_writes_round_column_and_keeps_result_clean(self):
+        from agent.agents.executor import record_execution
+
+        saved_execution = type("SavedExecution", (), {"id": 12})()
+
+        with (
+            patch("agent.agents.executor.AsyncSessionLocal") as session_cls,
+            patch("agent.agents.executor.create_execution", new=AsyncMock(return_value=saved_execution)) as create_execution,
+        ):
+            session_cls.return_value.__aenter__.return_value = object()
+            await record_execution(
+                incident_id="INC-ROUND",
+                action="kubectl delete pod order-xyz -n demo",
+                operator="ou_test",
+                status="success",
+                result={"exit_code": 0},
+                round_num=4,
+            )
+
+        execution = create_execution.await_args.args[1]
+        self.assertEqual(execution.round, 4)
+        self.assertEqual(execution.result, {"exit_code": 0})
+
     async def test_execute_approved_plan_records_success_and_updates_state(self):
         from agent.agents.executor import execute_approved_plan
 

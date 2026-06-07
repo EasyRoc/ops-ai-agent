@@ -8,11 +8,12 @@ from fastapi.staticfiles import StaticFiles
 
 from agent.config import settings
 from agent.api.v1 import approvals
+from agent.api.v1 import audit
 from agent.api.v1 import alerts
 from agent.api.v1 import executions
 from agent.api.v1 import incidents
 from agent.api.v1 import reports
-from agent.db.crud import ensure_phase2_schema, ensure_phase3_schema
+from agent.db.crud import ensure_phase2_schema, ensure_phase3_schema, ensure_phase4_schema, migrate_retry_data
 from agent.middleware.auth import rbac_middleware
 
 logging.basicConfig(
@@ -27,6 +28,8 @@ async def lifespan(app: FastAPI):
     logger.info(f"Ops Agent 启动中 {settings.agent_host}:{settings.agent_port}")
     await ensure_phase2_schema()
     await ensure_phase3_schema()
+    await ensure_phase4_schema()
+    await migrate_retry_data()
     yield
     logger.info("Ops Agent 正在关闭")
 
@@ -38,6 +41,7 @@ app = FastAPI(
 )
 
 app.include_router(alerts.router)
+app.include_router(audit.router)
 app.include_router(approvals.router)
 app.include_router(incidents.router)
 app.include_router(executions.router)

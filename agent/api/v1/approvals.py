@@ -240,28 +240,43 @@ async def _load_execution_state(incident_id: str, operator: str) -> AlertState |
 
     risk_assessment = incident.risk_assessment or {}
     retry_meta = risk_assessment.get("retry") or {}
+    retry_count = getattr(incident, "retry_count", None) or 0
+    retry_history = getattr(incident, "retry_history", None) or []
+    ai_generated = bool(getattr(incident, "ai_generated", False) or risk_assessment.get("ai_generated"))
+    ai_reasoning = getattr(incident, "ai_reasoning", None) or risk_assessment.get("ai_reasoning", "")
+
+    if not retry_history and retry_meta:
+        retry_count = retry_meta.get("count", 0)
+        retry_history = retry_meta.get("history") or []
+        logger.info(
+            "从 risk_assessment.retry 降级读取重试数据: incident=%s, retry_count=%s",
+            incident_id,
+            retry_count,
+        )
+
     latest_retry_plan = retry_meta.get("latest_plan") or {}
     runbook = {
         "name": incident.runbook_name,
         "steps": incident.action_plan or [],
     }
 
-    # AI 兜底方案的元数据临时存储在 risk_assessment JSONB 中。
-    # HTTP 回调恢复状态时要把这些字段补回 runbook，否则执行/验证节点只看得到普通步骤。
-    if risk_assessment.get("ai_generated"):
+    # Phase D: AI 元数据优先从专用列恢复，旧 risk_assessment 仅作兼容兜底。
+    if ai_generated:
         runbook.update(
             {
                 "ai_generated": True,
-                "ai_reasoning": risk_assessment.get("ai_reasoning", ""),
+                "ai_reasoning": ai_reasoning,
                 "verification": risk_assessment.get("verification", {}),
                 "confidence": risk_assessment.get("ai_confidence", 0.5),
             }
         )
-    if latest_retry_plan:
+    if latest_retry_plan and not getattr(incident, "retry_history", None):
         runbook = {
             **latest_retry_plan,
             "ai_generated": latest_retry_plan.get("ai_generated", True),
         }
+        if ai_reasoning and not runbook.get("ai_reasoning"):
+            runbook["ai_reasoning"] = ai_reasoning
 
     state: AlertState = {
         "alert_raw": {},
@@ -288,8 +303,8 @@ async def _load_execution_state(incident_id: str, operator: str) -> AlertState |
         "approval_status": incident.approval_status,
         "execution_result": None,
         "verification_result": None,
-        "retry_count": retry_meta.get("count"),
-        "retry_history": retry_meta.get("history") or [],
+        "retry_count": retry_count,
+        "retry_history": retry_history,
         "report": None,
         "operator": operator,
         "error": None,
@@ -301,7 +316,7 @@ async def _load_execution_state(incident_id: str, operator: str) -> AlertState |
         runbook.get("name"),
         len(runbook.get("steps") or []),
         risk_assessment.get("allowed"),
-        retry_meta.get("count"),
+        retry_count,
     )
     return state
 

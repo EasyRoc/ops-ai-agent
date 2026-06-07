@@ -157,7 +157,6 @@ async def record_execution(
     round_num: int = 1,
 ) -> Execution:
     """将一次真实执行落库，供 Web Console 和报告回溯。"""
-    result_with_round = {**(result or {}), "round": round_num}
     logger.info(
         "进入 record_execution: incident=%s, operator=%s, status=%s, round=%s, action=%s",
         incident_id,
@@ -172,7 +171,8 @@ async def record_execution(
             action=action,
             operator=operator,
             status=status,
-            result=result_with_round,
+            result=result,
+            round=round_num,
             completed_at=datetime.now(timezone.utc),
         )
         saved = await create_execution(session, execution)

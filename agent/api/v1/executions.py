@@ -18,6 +18,8 @@ def _serialize_execution(execution) -> dict:
         "operator": execution.operator,
         "status": execution.status,
         "result": execution.result,
+        "round": execution.round,
+        "ai_analysis": execution.ai_analysis,
         "created_at": execution.created_at.isoformat() if execution.created_at else None,
         "completed_at": execution.completed_at.isoformat() if execution.completed_at else None,
     }

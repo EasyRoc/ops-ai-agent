@@ -21,8 +21,12 @@ class IncidentAPITest(IsolatedAsyncioTestCase):
             action_plan=[{"risk_level": "中风险", "description": "扩容", "command": "kubectl scale deployment order-service -n demo --replicas=4"}],
             risk_assessment={"level": "中风险", "score": 40},
             approval_status="pending",
+            ai_generated=True,
+            retry_count=2,
             created_at=datetime(2026, 6, 1, tzinfo=timezone.utc),
         )
+        incident.ai_reasoning = "AI 判断为容量不足"
+        incident.retry_history = [{"round": 1, "analysis": "扩容未恢复"}]
 
         with patch("agent.api.v1.incidents.list_incidents", new=AsyncMock(return_value=[incident])):
             response = await list_incidents_endpoint(db=object())
@@ -31,6 +35,8 @@ class IncidentAPITest(IsolatedAsyncioTestCase):
         self.assertEqual(item["runbook_name"], "cpu_high.md")
         self.assertEqual(item["approval_status"], "pending")
         self.assertEqual(item["risk_assessment"]["level"], "中风险")
+        self.assertTrue(item["ai_generated"])
+        self.assertEqual(item["retry_count"], 2)
 
     async def test_incident_detail_includes_action_plan(self):
         incident = Incident(
@@ -44,6 +50,10 @@ class IncidentAPITest(IsolatedAsyncioTestCase):
             action_plan=[{"risk_level": "中风险", "description": "扩容", "command": "kubectl scale deployment order-service -n demo --replicas=4"}],
             risk_assessment={"level": "中风险", "score": 40},
             approval_status="pending",
+            ai_generated=True,
+            ai_reasoning="AI 判断为 CPU 热点",
+            retry_count=1,
+            retry_history=[{"round": 1, "analysis": "扩容未恢复"}],
         )
 
         with patch("agent.api.v1.incidents.get_incident", new=AsyncMock(return_value=incident)):
@@ -52,3 +62,7 @@ class IncidentAPITest(IsolatedAsyncioTestCase):
         self.assertEqual(response["runbook_name"], "cpu_high.md")
         self.assertEqual(response["action_plan"][0]["risk_level"], "中风险")
         self.assertEqual(response["approval_status"], "pending")
+        self.assertTrue(response["ai_generated"])
+        self.assertEqual(response["ai_reasoning"], "AI 判断为 CPU 热点")
+        self.assertEqual(response["retry_count"], 1)
+        self.assertEqual(response["retry_history"][0]["round"], 1)

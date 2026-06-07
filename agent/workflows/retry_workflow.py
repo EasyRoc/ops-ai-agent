@@ -75,11 +75,19 @@ def _format_verify_condition(runbook: dict) -> str:
 
 
 async def update_incident_retry_state(incident_id: str, runbook: dict, risk_assessment: dict) -> None:
-    """把 Phase C 临时重试状态写回 risk_assessment.retry。"""
+    """把 AI 重试状态写回工单。
+
+    Phase D 起以专用列 retry_count/retry_history/ai_generated/ai_reasoning 为准；
+    risk_assessment.retry 暂时保留为冗余副本，兼容旧数据和旧展示逻辑。
+    """
+    retry_meta = risk_assessment.get("retry") or {}
+    retry_count = int(retry_meta.get("count") or 0)
+    retry_history = retry_meta.get("history") or []
+    ai_reasoning = runbook.get("retry_reasoning") or runbook.get("ai_reasoning") or ""
     logger.info(
         "进入 update_incident_retry_state: incident=%s, retry_count=%s, steps=%s",
         incident_id,
-        (risk_assessment.get("retry") or {}).get("count"),
+        retry_count,
         len(runbook.get("steps") or []),
     )
     async with AsyncSessionLocal() as session:
@@ -91,6 +99,10 @@ async def update_incident_retry_state(incident_id: str, runbook: dict, risk_asse
             action_plan=runbook.get("steps", []),
             risk_assessment=risk_assessment,
             approval_status="pending",
+            retry_count=retry_count,
+            retry_history=retry_history,
+            ai_generated=True,
+            ai_reasoning=ai_reasoning,
         )
     logger.info("重试状态已写回工单: incident=%s", incident_id)
 
@@ -211,6 +223,17 @@ async def retry_execute(state: AlertState) -> AlertState:
         "results": results,
         "round": round_num,
     }
+    await write_audit(
+        incident_id,
+        operator,
+        "retry_executed",
+        {
+            "round": round_num,
+            "status": state["execution_result"]["status"],
+            "executed_steps": len(results),
+            "total_steps": len(selected_steps),
+        },
+    )
     await update_incident_status(
         incident_id,
         "executed" if success else "execution_failed",
@@ -375,6 +398,14 @@ async def retry_escalate(state: AlertState) -> AlertState:
         or "AI 重试链路未满足继续条件"
     )
     state["approval_status"] = "escalated"
+    retry_count = _coerce_round(state.get("retry_count"), 0)
+    if retry_count >= MAX_RETRY_ROUNDS:
+        await write_audit(
+            incident_id,
+            "system",
+            "retry_exhausted",
+            {"total_rounds": retry_count, "max": MAX_RETRY_ROUNDS, "reason": reason},
+        )
     await update_incident_status(incident_id, "escalated", approval_status="escalated")
     await write_audit(incident_id, "system", "retry_escalated", {"reason": reason})
     logger.warning("AI 重试升级人工: incident=%s, reason=%s", incident_id, reason)
