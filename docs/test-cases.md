@@ -1,6 +1,6 @@
 # Ops AI Agent 测试用例文档
 
-> 适用版本：当前主干已覆盖 Phase 3，包含告警接入、诊断、Runbook、风险评估、飞书审批、审批后自动执行、恢复验证和故障报告。
+> 适用版本：当前主干已覆盖 AI 兜底完整链路，包含告警接入、诊断、Runbook、AI 兜底方案、风险评估、飞书确认、自动执行、失败重试、恢复验证、审计时间线和故障报告。
 >
 > 建议读法：先执行「冒烟测试」和「端到端验收」，如果失败，再按对应模块用例定位问题。
 
@@ -11,11 +11,12 @@
 - 本地环境可以启动、重启、停止和查看状态。
 - Prometheus、Alertmanager、Grafana、Loki、Promtail 和 Demo 服务可用。
 - Agent 可以接收 Alertmanager Webhook 并创建 Incident。
-- Agent 可以完成根因诊断、Runbook 匹配、风险评估和待审批状态写入。
-- 飞书卡片回调可以更新审批状态。
-- 审批通过后可以触发白名单自动执行、恢复验证和故障报告生成。
+- Agent 可以完成根因诊断、Runbook 匹配或 AI 兜底方案生成、风险评估和待确认状态写入。
+- 飞书卡片回调可以更新审批状态，并把原卡片替换为无按钮的结果卡片。
+- 确认通过后可以触发白名单自动执行、恢复验证和故障报告生成。
+- AI 方案执行后未恢复时，可以生成修正方案并进入最多 5 轮确认式重试。
 - 重复告警在去重窗口内不会重复诊断、重复发送卡片或重复创建新 Incident。
-- Web Console 可以查看 Incident、执行记录和故障报告。
+- Web Console 可以查看 Incident、执行记录、重试时间线、审计日志和故障报告。
 - RBAC 和安全边界生效，普通角色不能直接触发执行。
 
 ## 2. 测试范围
@@ -24,9 +25,11 @@
 |------|----------|------|
 | 本地启动脚本 `ops.sh` | 覆盖 | bootstrap、start、restart、stop、status、logs、demo、test、clean |
 | Agent API | 覆盖 | health、alerts、incidents、approval、executions、reports |
-| 诊断工作流 | 覆盖 | parse、context、rca、runbook、risk、approval |
-| Phase 3 执行工作流 | 覆盖 | execute、verify、report |
-| 飞书回调 | 覆盖 | challenge、approve、reject、escalate、卡片更新 |
+| 诊断工作流 | 覆盖 | parse、context、rca、runbook、fallback、risk、approval |
+| 执行工作流 | 覆盖 | execute、verify、report |
+| AI 重试工作流 | 覆盖 | retry_execute、retry_verify、retry_analyze、retry_exhausted |
+| 飞书回调 | 覆盖 | challenge、approve、approve_ai、manual_fix、continue_retry、stop_retry、reject、escalate、卡片更新 |
+| 审计可观测 | 覆盖 | audit API、AI 推理、重试历史、执行轮次 |
 | 可观测栈 | 覆盖 | Prometheus、Alertmanager、Grafana、Loki、Promtail |
 | Web Console | 覆盖 | 首页、详情页、执行页、报告页 |
 | Demo 服务 | 覆盖 | order、payment、inventory、frontend |
@@ -71,7 +74,7 @@ SERVICE_CHAT_IDS='{"order-service":"oc_xxx","payment-service":"oc_xxx"}'
 
 说明：
 
-- DeepSeek 未配置时，根因分析会走规则兜底。
+- DeepSeek 未配置时，根因分析会走规则兜底；AI 兜底方案和失败自省重试需要可用 LLM。
 - 飞书未配置时，诊断、数据库保存、Web Console、API 和 E2E 仍可测试。
 - 飞书卡片按钮需要公网 HTTPS 回调地址，详见 `docs/feishu-card-callback.md`。
 
@@ -81,7 +84,7 @@ SERVICE_CHAT_IDS='{"order-service":"oc_xxx","payment-service":"oc_xxx"}'
 
 | 服务 | Kubernetes Deployment | 默认副本数 | 说明 |
 |------|------------------------|------------|------|
-| order-service | `order-service` | 2 | 主要用于 CPU 故障和 Phase 3 自动扩容 |
+| order-service | `order-service` | 2 | 主要用于 CPU 故障、Runbook 自动扩容和 AI 兜底 E2E |
 | payment-service | `payment-service` | 2 | 支付样例服务 |
 | inventory-service | `inventory-service` | 2 | 库存样例服务 |
 | frontend-service | `frontend-service` | 2 | 前端样例服务 |
@@ -94,6 +97,7 @@ SERVICE_CHAT_IDS='{"order-service":"oc_xxx","payment-service":"oc_xxx"}'
 | `HighErrorRate` | `error_rate.md` | 错误率过高 |
 | `HighLatency` | `latency_high.md` | 延迟过高 |
 | `OOMKilled` | `oom.md` | 容器 OOM |
+| `ThreadPoolExhausted` / `DiskPressure` | `ai_fallback` | 未知告警，验证 AI 兜底方案 |
 
 ### 4.3 角色头
 
@@ -115,8 +119,10 @@ SERVICE_CHAT_IDS='{"order-service":"oc_xxx","payment-service":"oc_xxx"}'
 4. 打开 Web Console、Grafana、Prometheus。
 5. 执行 `tests/e2e_phase2.sh`。
 6. 执行 `tests/e2e_phase3.sh`。
-7. 检查重复告警去重。
-8. 如果配置了飞书，手动点击飞书卡片按钮验证回调和卡片更新。
+7. 执行 `tests/e2e_retry_loop.sh`。
+8. 执行 `tests/e2e_full_pipeline.sh`。
+9. 检查重复告警去重。
+10. 如果配置了飞书，手动点击飞书卡片按钮验证回调、卡片更新和重试卡片。
 
 ## 6. 冒烟测试
 
@@ -188,7 +194,7 @@ SERVICE_CHAT_IDS='{"order-service":"oc_xxx","payment-service":"oc_xxx"}'
 | 前置条件 | Python 依赖已安装，推荐已执行 `./ops.sh bootstrap` |
 | 操作步骤 | 执行 `.venv/bin/python -m unittest discover -s tests -p 'test*.py' -v` |
 | 预期结果 | 所有测试通过 |
-| 覆盖范围 | 告警工作流、审批、执行器、验证、报告、风险、Runbook、Web Console、飞书封装等 |
+| 覆盖范围 | 告警工作流、审批、执行器、验证、报告、风险、Runbook、AI 兜底、重试工作流、Web Console、飞书封装等 |
 
 ### TC-AUTO-002 Shell 脚本语法检查
 
@@ -196,7 +202,7 @@ SERVICE_CHAT_IDS='{"order-service":"oc_xxx","payment-service":"oc_xxx"}'
 |------|------|
 | 优先级 | P1 |
 | 类型 | 自动化测试 |
-| 操作步骤 | 执行 `bash -n ops.sh && for f in tests/e2e_phase1.sh tests/e2e_ai_fallback.sh tests/e2e_phase2.sh tests/e2e_phase3.sh; do bash -n "$f"; done` |
+| 操作步骤 | 执行 `bash -n ops.sh && for f in tests/e2e_phase1.sh tests/e2e_ai_fallback.sh tests/e2e_phase2.sh tests/e2e_phase3.sh tests/e2e_retry_loop.sh tests/e2e_full_pipeline.sh; do bash -n "$f"; done` |
 | 预期结果 | 命令无输出且退出码为 0 |
 
 ### TC-AUTO-003 本地脚本测试
@@ -320,9 +326,9 @@ SERVICE_CHAT_IDS='{"order-service":"oc_xxx","payment-service":"oc_xxx"}'
 | 字段 | 内容 |
 |------|------|
 | 优先级 | P1 |
-| 前置条件 | 已完成 Phase 3 执行 |
+| 前置条件 | 已完成 Runbook 自动执行或 AI 自动执行 |
 | 操作步骤 | 执行 `curl -s http://localhost:8000/api/v1/incidents/INC-xxxx/executions` |
-| 预期结果 | 至少包含一条执行记录，字段包括 `action`、`operator`、`status`、`result` |
+| 预期结果 | 至少包含一条执行记录，字段包括 `action`、`operator`、`status`、`result`，AI 重试场景还包含轮次信息 |
 
 ### TC-API-007 查询故障报告列表
 
@@ -487,7 +493,7 @@ curl -s -X POST http://localhost:8000/api/v1/approvals/callback \
 | 优先级 | P0 |
 | 前置条件 | 已存在 `approval_status=pending` 的 Incident |
 | 操作步骤 | 执行下面命令，把 `INC-xxxx` 替换为真实 ID |
-| 预期结果 | API 返回 `approval_status=approved`，数据库中 Incident 审批状态变为 `approved`，后台触发 Phase 3 执行工作流 |
+| 预期结果 | API 返回 `approval_status=approved`，数据库中 Incident 审批状态变为 `approved`，后台触发普通执行工作流 |
 
 ```bash
 curl -s -X POST http://localhost:8000/api/v1/approvals/callback \
@@ -585,7 +591,7 @@ tests/e2e_phase1.sh
 | 预期结果 | 创建新 Incident，匹配 `cpu_high.md`，生成 action_plan 和 risk_assessment，状态进入 `pending`，模拟批准后变为 `approved` |
 | 额外验证 | Web Console 首页和 Incident 详情页可访问 |
 
-## 15. Phase 3 端到端测试
+## 15. 自动执行与报告端到端测试
 
 ### TC-E2E-003 审批后自动执行、验证和报告
 
@@ -607,6 +613,26 @@ tests/e2e_phase1.sh
 ```bash
 kubectl scale deployment order-service -n demo --replicas=2 --context kind-ops-agent
 ```
+
+### TC-E2E-004 AI 兜底重试循环
+
+| 字段 | 内容 |
+|------|------|
+| 优先级 | P0 |
+| 类型 | 端到端 |
+| 前置条件 | Agent、PostgreSQL、Redis、Prometheus、Kubernetes Demo 和 LLM 配置均可用 |
+| 操作步骤 | 执行 `tests/e2e_retry_loop.sh` |
+| 预期结果 | 创建未知告警 Incident，生成 `ai_fallback`，模拟 `approve_ai` 后产生执行或重试记录，审计日志包含 `ai_plan_generated`，Web Console 展示重试和审计时间线 |
+
+### TC-E2E-005 AI 兜底完整链路
+
+| 字段 | 内容 |
+|------|------|
+| 优先级 | P0 |
+| 类型 | 端到端 |
+| 前置条件 | 完整本地环境已启动，LLM 配置可用 |
+| 操作步骤 | 执行 `tests/e2e_full_pipeline.sh` |
+| 预期结果 | 覆盖未知告警、AI 方案、飞书批准回调、执行记录、审计事件、Web Console 时间线；环境恢复时可生成故障报告 |
 
 ## 16. 自动执行和安全边界测试用例
 
@@ -662,7 +688,7 @@ kubectl scale deployment order-service -n demo --replicas=2 --context kind-ops-a
 | 字段 | 内容 |
 |------|------|
 | 优先级 | P0 |
-| 前置条件 | Phase 3 E2E 已执行成功 |
+| 前置条件 | 自动执行 E2E 已执行成功 |
 | 操作步骤 | 查询 `http://localhost:8000/api/v1/reports/INC-xxxx` |
 | 预期结果 | 返回报告 JSON，包含 `content` 和 `fault_patterns` |
 
@@ -748,9 +774,9 @@ docker compose exec -T postgres psql -U opsagent -d ops_agent \
 | 字段 | 内容 |
 |------|------|
 | 优先级 | P1 |
-| 前置条件 | Phase 3 已执行 |
+| 前置条件 | 已执行 Runbook 自动执行或 AI 自动执行 |
 | 操作步骤 | 执行下面 SQL |
-| 预期结果 | 可以看到执行动作、操作者、状态和结果 |
+| 预期结果 | 可以看到执行动作、操作者、状态、结果和 AI 重试轮次 |
 
 ```bash
 docker compose exec -T postgres psql -U opsagent -d ops_agent \
@@ -778,7 +804,7 @@ docker compose exec -T postgres psql -U opsagent -d ops_agent \
 | 优先级 | P1 |
 | 前置条件 | 已执行审批或自动执行 |
 | 操作步骤 | 执行下面 SQL |
-| 预期结果 | 可以看到审批、执行、报告等审计事件 |
+| 预期结果 | 可以看到审批、AI 方案生成、执行、验证、重试、自省、报告等审计事件 |
 
 ```bash
 docker compose exec -T postgres psql -U opsagent -d ops_agent \
@@ -863,7 +889,7 @@ docker compose exec -T postgres psql -U opsagent -d ops_agent \
 | 字段 | 内容 |
 |------|------|
 | 优先级 | P1 |
-| 场景 | 执行过 Phase 3 E2E 后 |
+| 场景 | 执行过自动执行 E2E 后 |
 | 操作步骤 | 执行 `kubectl scale deployment order-service -n demo --replicas=2 --context kind-ops-agent` |
 | 预期结果 | `order-service` 恢复为 2 个副本 |
 
@@ -910,11 +936,13 @@ docker compose exec -T postgres psql -U opsagent -d ops_agent \
 - `./ops.sh test ai` 通过。
 - `tests/e2e_phase2.sh` 通过。
 - `tests/e2e_phase3.sh` 通过。
-- Web Console 首页、详情页、执行记录页、报告页可以访问。
+- `tests/e2e_retry_loop.sh` 通过。
+- `tests/e2e_full_pipeline.sh` 通过。
+- Web Console 首页、详情页、执行记录页、报告页可以访问，详情页能展示重试时间线和审计日志。
 - Grafana 可以登录，Demo 服务看板有数据。
 - 相同 `fingerprint` 在 300 秒内重复发送时不会创建第二个 Incident。
-- 如果配置了飞书，真实点击「批准执行」后，数据库状态更新，原卡片按钮被结果卡片替换。
-- Phase 3 后数据库中可以查询到 Incident、Execution、Report 和 AuditLog。
+- 如果配置了飞书，真实点击「批准执行」「AI 自动执行」「继续 AI 执行」后，数据库状态更新，原卡片按钮被结果卡片替换。
+- 数据库中可以查询到 Incident、Execution、Report、AuditLog，以及 AI 兜底相关的 `retry_count` / `retry_history`。
 
 ## 24. 常见失败排查
 
@@ -977,7 +1005,7 @@ curl -s "http://localhost:9090/api/v1/query?query=up%7Bnamespace%3D%22demo%22%7D
 - 如果是 curl 模拟回调，通常不会携带真实 message id，因此只能验证数据库更新和后台执行。
 - 如果是真实飞书卡片，必须保证 `.env` 中飞书应用凭证正确，回调请求能携带消息上下文，并且应用有更新卡片权限。
 
-### 24.5 Phase 3 执行后副本数变为 4
+### 24.5 自动执行后副本数变为 4
 
 这是当前 CPU Runbook 的预期行为。恢复命令：
 

@@ -228,7 +228,7 @@ curl -X POST https://你的公网域名/api/v1/approvals/callback \
 
 ```json
 {
-  "action": "approve",
+  "action": "approve_ai",
   "incident_id": "INC-xxxx"
 }
 ```
@@ -238,6 +238,10 @@ curl -X POST https://你的公网域名/api/v1/approvals/callback \
 | action | 含义 | 落库状态 |
 |--------|------|----------|
 | `approve` | 批准执行 | `approved` |
+| `approve_ai` | 批准 AI 自动执行 | `ai_approved` |
+| `manual_fix` | 我自己来，转人工执行 | `manual_executing` |
+| `continue_retry` | 继续 AI 执行下一轮修正方案 | `retry_continue` |
+| `stop_retry` | 停止 AI 重试并转人工 | `escalated` |
 | `reject` | 拒绝 | `rejected` |
 | `escalate` | 转人工 | `escalated` |
 
@@ -247,6 +251,7 @@ curl -X POST https://你的公网域名/api/v1/approvals/callback \
 |------|------|------|
 | `/api/v1/approvals/callback` | `POST` | 飞书卡片按钮回调 |
 | `/api/v1/incidents/{incident_id}/approval` | `GET` | 查询审批状态 |
-| `/api/v1/incidents/{incident_id}` | `GET` | 查询事件详情、Runbook、风险评估 |
+| `/api/v1/incidents/{incident_id}` | `GET` | 查询事件详情、Runbook / AI 兜底方案、风险评估、重试历史 |
+| `/api/v1/incidents/{incident_id}/audit` | `GET` | 查询审批、执行、重试和报告审计时间线 |
 
 官方参考：[飞书卡片回调通信方式](https://open.feishu.cn/document/feishu-cards/card-callback-communication)。
